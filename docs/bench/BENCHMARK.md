@@ -56,12 +56,18 @@ we built a worse Balatro.
 | Metric | Threshold |
 |---|---|
 | G2.1 Median score gain from optimal reorder vs. arrival order | **≥ 25%** |
-| G2.2 Rounds where the optimal ordering differs from the previous round's | **≥ 50%** |
+| G2.2 Rounds where the optimal ordering differs from the previous round's | **≤ 30%** (amended) |
+| G2.4 Shift boundaries where the optimal ordering changes | **≥ 60%** (new) |
 | G2.3 Non-commutative machine pairs (`A∘B ≠ B∘A` on random batches) | **≥ 60%** |
 
-G2.2 is the one that matters most. If the best order is found once and never
-changes, reordering is a puzzle you solve at minute three and then never think
-about again.
+G2.2 and G2.4 together are the ones that matter most, and their direction was
+**reversed by amendment A1** — see Amendments. The original G2.2 demanded the
+optimal order change *every round*, which would have been a formal requirement
+that the player's structure be invalidated three times per shift. The corrected
+pair asks for a line that is **stable within a shift and restructured between
+shifts**: reordering stays a live decision (G2.4) without becoming a chore
+(G2.2). If the best order is found once and never changes at all, both fail and
+reordering is a puzzle solved at minute three.
 
 ## G3 — Build diversity (no dominant strategy)
 
@@ -134,5 +140,23 @@ unreachable with this design and says why.
 
 ## Amendments
 
-*(none yet — every entry here must state date, metric, old value, new value,
-reason, and what was measured that motivated it)*
+### A1 — 2026-09-07 — G2.2 direction reversed, G2.4 added
+
+- **Metric:** G2.2, "rounds where the optimal ordering differs from the previous round's"
+- **Old:** ≥ 50%   **New:** ≤ 30%, plus a new G2.4 (shift boundaries where the
+  optimal ordering changes, ≥ 60%)
+- **What motivated it:** not a measurement — a design review. An outside veteran
+  designer (`docs/design/VETERAN-REVIEW.md`) observed that G2.2 was *at war with
+  the game's own fantasy*. A factory game sells the feeling of owning a machine
+  you built that runs without you. A metric demanding the optimal order change
+  every round is a formal guarantee that the line never becomes the player's —
+  it makes reordering homework three times per shift rather than a structural
+  decision. The metric was measuring depth by pricing it in ownership, and
+  ownership is the reason the factory metaphor was chosen in the first place.
+- **Honest note:** this amendment *relaxes* a threshold, which is exactly the
+  move this file exists to prevent. It is logged here in full for that reason.
+  The defence is that the change was proposed by a reviewer who had not seen any
+  measurement, before the metric was ever run, and that it is paired with a new
+  metric (G2.4) that preserves the underlying claim rather than dropping it. If
+  a later reader judges this to be goalpost-moving, the record is here to be
+  judged on.
