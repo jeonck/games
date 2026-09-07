@@ -26,6 +26,7 @@ import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import '../content/index.ts';
 import { AUDITS, measureNonCommutativity } from '../content/index.ts';
+import { getRegistry } from '../content/registry.ts';
 import { aggregate, winCount } from './metrics.ts';
 import { evaluateGate } from './gate.ts';
 import { renderMarkdown } from './report.ts';
@@ -106,7 +107,12 @@ async function main(): Promise<void> {
 
   // --- the frozen pipeline ------------------------------------------------
   const nc = measureNonCommutativity();
-  const tiers = aggregate(records);
+  // BENCHMARK.md amendment A2: G3.1/G3.4 count only machines the player chose to
+  // acquire. Passing the registry's starter line is what makes that amendment
+  // real — A1 was amended in the markdown and never reached the code, and the
+  // gate scored the old threshold for a full 20,000-run iteration as a result.
+  const starterLine = getRegistry().starterLine ?? [];
+  const tiers = aggregate(records, { excludeMachineDefs: starterLine });
   const report = evaluateGate(tiers, iteration, commit(), { nonCommutativePairRate: nc.rate });
   const md: string[] = [renderMarkdown(report)];
 

@@ -161,7 +161,20 @@ function presenceShare(runs: readonly RunRecord[], pick: (r: RunRecord) => unkno
  *
  * Records whose `bot` is not a known tier are ignored.
  */
-export function aggregate(records: RunRecord[]): TierMetrics[] {
+export interface AggregateOptions {
+  /**
+   * Machine defs to ignore when computing G3.1 / G3.4 — see BENCHMARK.md
+   * amendment A2. Every run starts with the same line, so counting starter
+   * machines makes both metrics report the starter line rather than the
+   * player's build: they sit at 100% whatever the player does. Callers pass
+   * the registry's starter line here. Archetypes are dropped per starter
+   * machine, not wholesale, so an archetype the player also acquires still
+   * counts.
+   */
+  excludeMachineDefs?: readonly string[];
+}
+
+export function aggregate(records: RunRecord[], opts: AggregateOptions = {}): TierMetrics[] {
   const byBot = new Map<BotName, RunRecord[]>();
   for (const b of BOT_TIERS) byBot.set(b, []);
   if (Array.isArray(records)) {
@@ -171,10 +184,13 @@ export function aggregate(records: RunRecord[]): TierMetrics[] {
       if (bucket) bucket.push(r);
     }
   }
-  return BOT_TIERS.map((b) => tierMetrics(b, byBot.get(b) as RunRecord[]));
+  const exclude = opts.excludeMachineDefs ?? [];
+  return BOT_TIERS.map((b) => tierMetrics(b, byBot.get(b) as RunRecord[], exclude));
 }
 
-function tierMetrics(bot: BotName, rs: readonly RunRecord[]): TierMetrics {
+function tierMetrics(
+  bot: BotName, rs: readonly RunRecord[], excludeDefs: readonly string[] = [],
+): TierMetrics {
   const runs = rs.length;
   const wins: RunRecord[] = [];
   const decisions: number[] = [];
@@ -238,8 +254,28 @@ function tierMetrics(bot: BotName, rs: readonly RunRecord[]): TierMetrics {
       ? p99FinalScore / p50FinalScore
       : NaN;
 
-  const archetypeWinShare = presenceShare(wins, (r) => r.archetypes);
-  const machineWinShare = presenceShare(wins, (r) => r.machines);
+  // A2: count only machines the player chose to acquire. `machines` and
+  // `archetypes` are positionally aligned in the telemetry, so one starter def
+  // drops exactly one archetype entry — an archetype the player also bought
+  // still counts.
+  const acquired = (r: RunRecord): { defs: string[]; arcs: unknown[] } => {
+    if (excludeDefs.length === 0 || !Array.isArray(r.machines)) {
+      return { defs: (r.machines as string[]) ?? [], arcs: (r.archetypes as unknown[]) ?? [] };
+    }
+    const budget = new Map<string, number>();
+    for (const d of excludeDefs) budget.set(d, (budget.get(d) ?? 0) + 1);
+    const defs: string[] = []; const arcs: unknown[] = [];
+    const arcList = Array.isArray(r.archetypes) ? (r.archetypes as unknown[]) : [];
+    for (let i = 0; i < r.machines.length; i++) {
+      const d = r.machines[i];
+      const left = budget.get(d) ?? 0;
+      if (left > 0) { budget.set(d, left - 1); continue; }
+      defs.push(d); if (i < arcList.length) arcs.push(arcList[i]);
+    }
+    return { defs, arcs };
+  };
+  const archetypeWinShare = presenceShare(wins, (r) => acquired(r).arcs);
+  const machineWinShare = presenceShare(wins, (r) => acquired(r).defs);
 
   return {
     bot,

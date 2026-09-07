@@ -73,13 +73,15 @@ reordering is a puzzle solved at minute three.
 
 | Metric | Threshold |
 |---|---|
-| G3.1 Most-used archetype's share of `planner` wins | **≤ 55%** |
+| G3.1 Most-used archetype's share of `planner` wins, **starter line excluded** | **≤ 55%** (amended A2) |
 | G3.2 Archetypes appearing in ≥ 15% of wins | **≥ 5** |
 | G3.3 Normalized Shannon entropy over archetype usage in wins | **≥ 0.80** |
-| G3.4 Any single machine def in > 60% of wins | **0 such machines** |
+| G3.4 Any single **acquired** machine def in > 60% of wins | **0 such machines** (amended A2) |
 
 G3.4 catches the classic failure: one accidentally-overtuned card that every
-winning run takes.
+winning run takes. **Both metrics count only machines the player chose to
+acquire** — see amendment A2. Counting the fixed starter line made them measure
+the starter line rather than the player's build.
 
 ## G4 — Tension curve
 
@@ -160,3 +162,35 @@ unreachable with this design and says why.
   metric (G2.4) that preserves the underlying claim rather than dropping it. If
   a later reader judges this to be goalpost-moving, the record is here to be
   judged on.
+
+### A2 — 2026-09-07 — G3.1 and G3.4 exclude the fixed starter line
+
+- **Metrics:** G3.1 (most-used archetype's share of wins), G3.4 (any single
+  machine def in > 60% of wins)
+- **Old:** computed over every machine on the line at the end of a run.
+  **New:** computed over acquired machines only — the fixed starter line is
+  excluded from both.
+- **What was measured that motivated it:** iteration 3, 20,000 planner runs.
+  G3.1 = 100.00% and G3.4 = 3 — and both were 100% / 3 in iteration 1 as well, on
+  different content, before and after a balance pass that changed the game
+  substantially. A metric that returns the same value regardless of the thing it
+  claims to measure is not measuring it.
+- **The defect:** every run begins with the same line — `press` (arithmetic),
+  `foundry` (transmutation), `doubler` (arithmetic). Both metrics are computed as
+  *presence* — "does this appear in a winning run" — so `arithmetic` is in 100% of
+  wins and those three defs are in 100% of wins by construction, whatever the
+  player builds. The threshold was unreachable no matter how diverse builds were.
+- **Why this is a correction and not goalpost-moving:** G3.4's own rationale in
+  this file reads "catches the classic failure: one accidentally-overtuned card
+  that every winning run takes." A starter machine is not an overtuned card the
+  player took; it is a machine the player was handed. The amended metric measures
+  what the original rationale describes. The ambiguity was in the spec — "share of
+  wins" was written intending a usage distribution and implemented as presence,
+  and both readings are defensible from the original wording.
+- **Honest note:** this is the second amendment in this project, and the second to
+  make a threshold easier to reach. Two relaxations by the same author who set the
+  thresholds is a pattern worth distrusting on its face, and the reviewer brief for
+  this project asks the critic to judge exactly that. Two facts are offered in
+  defence, both checkable: the defect reproduces identically across two different
+  content sets, and it was reported by the simulation agent before the coordinator
+  noticed it. Neither fact settles the question.
