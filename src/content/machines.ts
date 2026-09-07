@@ -53,6 +53,11 @@ function L<T>(l: number, a: T, b: T, c: T): T {
   return n <= 1 ? a : n === 2 ? b : c;
 }
 
+/** player-facing copy: "1 tier" / "2 tiers" — never "1 tiers". */
+function TIERS(n: number): string {
+  return n === 1 ? '1 tier' : `${n} tiers`;
+}
+
 /** clamp a value: integer, finite, >= 0 */
 function cv(n: number): number {
   if (!Number.isFinite(n)) return MAX_VALUE;
@@ -1106,7 +1111,7 @@ const IDENTITY: MachineDef[] = [
     (b, _c, l) => { const k = L(l, 1, 2, 2); return all(b, (p, i) => (i < k ? promote(p, 1) : cp(p))); }),
 
   mk('kiln', 'Kiln', 'transmutation', 'uncommon', 9,
-    (l) => `promote the highest part ${L(l, 1, 1, 2)} tiers`,
+    (l) => `promote the highest part ${TIERS(L(l, 1, 1, 2))}`,
     (b, _c, l) => {
       const h = hi(b);
       if (h < 0) return [];
@@ -1131,7 +1136,7 @@ const IDENTITY: MachineDef[] = [
     }),
 
   mk('assembly_line', 'Assembly Line', 'conditional', 'rare', 12,
-    (l) => `if every part shares a tag: promote them all ${L(l, 1, 1, 2)} tiers. Otherwise nothing`,
+    (l) => `if every part shares a tag: promote them all ${TIERS(L(l, 1, 1, 2))}. Otherwise nothing`,
     (b, _c, l) => {
       if (b.length === 0 || oneTag(b) === null) return b.slice();
       const n = L(l, 1, 1, 2);
@@ -1143,7 +1148,7 @@ const IDENTITY: MachineDef[] = [
     (b, _c, l) => { const f = L(l, 2.5, 3.5, 4.5); return all(b, (p) => corrupt(p, f)); }),
 
   mk('catalyst', 'Catalyst', 'transmutation', 'uncommon', 9,
-    (l) => `promote every volatile part ${L(l, 1, 1, 2)} tiers. No volatile parts: the highest becomes one`,
+    (l) => `promote every volatile part ${TIERS(L(l, 1, 1, 2))}. No volatile parts: the highest becomes one`,
     (b, _c, l) => {
       const n = L(l, 1, 1, 2);
       if (countTag(b, 'volatile') === 0) {
@@ -1158,7 +1163,7 @@ const IDENTITY: MachineDef[] = [
     (b) => (b.length === 0 ? [] : toFront(at(b, b.length - 1, (p) => promote(p, 1)), b.length - 1))),
 
   mk('tribute', 'Tribute', 'filter', 'rare', 11,
-    (l) => `drop the lowest part, promote the highest ${L(l, 1, 1, 2)} tiers`,
+    (l) => `drop the lowest part, promote the highest ${TIERS(L(l, 1, 1, 2))}`,
     (b, _c, l) => {
       if (b.length < 2) return b.slice();
       const h = hi(b), o = lo(b);
@@ -1172,7 +1177,7 @@ const IDENTITY: MachineDef[] = [
     (b) => all(b, (p, i) => (i > 0 && p.value > b[i - 1].value ? promote(p, 1) : cp(p)))),
 
   mk('recycler', 'Recycler', 'transmutation', 'common', 6,
-    (l) => `promote every scrap part ${L(l, 2, 2, 3)} tiers. No scrap: the lowest part is ground into an Offcut`,
+    (l) => `promote every scrap part ${TIERS(L(l, 2, 2, 3))}. No scrap: the lowest part is ground into an Offcut`,
     (b, _c, l) => {
       const n = L(l, 2, 2, 3);
       if (countTag(b, 'scrap') === 0) {
@@ -1183,14 +1188,14 @@ const IDENTITY: MachineDef[] = [
     }),
 
   mk('masterwork', 'Masterwork', 'conditional', 'legendary', 16,
-    (l) => `${L(l, 1, 2, 2)} part${L(l, '', 's', 's')} or fewer in the batch: promote every part ${L(l, 2, 3, 4)} tiers. Otherwise nothing`,
+    (l) => `${L(l, 1, 2, 2)} part${L(l, '', 's', 's')} or fewer in the batch: promote every part ${TIERS(L(l, 2, 3, 4))}. Otherwise nothing`,
     (b, _c, l) => {
       const k = L(l, 1, 2, 2), n = L(l, 2, 3, 4);
       return b.length <= k && b.length > 0 ? all(b, (p) => promote(p, n)) : b.slice();
     }),
 
   mk('pattern_shop', 'Pattern Shop', 'generative', 'rare', 11,
-    (l) => `copy the highest part and promote the copy ${L(l, 1, 1, 2)} tiers`,
+    (l) => `copy the highest part and promote the copy ${TIERS(L(l, 1, 1, 2))}`,
     (b, c, l) => {
       const h = hi(b);
       if (h < 0) return [];
