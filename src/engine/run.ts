@@ -29,32 +29,46 @@ import { getRegistry } from '../content/registry.ts';
 /**
  * QUOTA CURVE.  quota(shift, round) = BASE * GROWTH^(shift-1) * ROUND_MULT[round-1]
  *
- * Reasoning:
- *  - GROWTH = 1.6 per shift compounds to 26.8x across the 8 shifts. That is steep
- *    enough that flat-additive builds die around shift 4-5 (they scale linearly)
- *    while multiplicative builds keep pace — which is exactly the pressure that
- *    forces the player from "add value" into "build an engine", and is what makes
- *    G1.5 (planner >= 2.5x greedy) reachable.
- *  - ROUND_MULT = [1, 1.5, 2.4] makes round 3 (the Audit) 2.4x round 1, so the boss
- *    is a real wall inside the shift rather than a formality, while the two Order
- *    rounds before it are the ramp that lets you buy the answer to it.
- *  - Deliberately NOT monotonic across the shift boundary (shift N round 3 = 2.4x
- *    base is above shift N+1 round 1 = 1.6x base). That dip is the breather after a
- *    boss; without it every round is a boss and G4.2/G4.3 (losses must not pile up
- *    in one shift) get harder, not easier. `quotaFor` is monotonic in each argument
- *    with the other held fixed, which is what api.ts asks for.
- *  - BASE = 300 against a ~20-part starter crate of value ~5-8 parts: a raw 5-part
- *    shipment is worth ~30, four of them ~120, so shift 1 round 1 is unclearable
- *    without the line doing real work. The game states its thesis on turn one.
- *  - Final quota is quotaFor(8, 3) = 19330 before the audit's own quotaMult. G5.1
- *    wants a p95 of 20x that (~390k), which multiplicative content can reach and
- *    additive content cannot — again by design.
+ * REBALANCED after the first bot benchmark. The shape it replaces was
+ * BASE 300 / GROWTH 1.6 / ROUND_MULT [1, 1.5, 2.4], and it measured like this:
+ * 99% of every planner and oracle loss landed on round 3, and rounds 1 and 2 were
+ * being cleared in one or two of their four shipments from shift 4 onward. The
+ * whole difficulty of the game lived in one round out of three, on top of which
+ * that round also carried the Audit's own quota multiplier and its rule. Two free
+ * rounds and a wall is not a curve.
+ *
+ * Reasoning for the numbers now:
+ *  - GROWTH = 1.66 per shift compounds to 34.7x across the 8 shifts. It is the
+ *    steeper half of the trade the audits paid for: the ramp is now carried by the
+ *    SHIFT, where it applies to all three rounds, instead of by round 3 alone. That
+ *    is still steep enough that flat-additive builds fall off around shift 4-5 while
+ *    multiplicative builds keep pace, which is the pressure that turns "add value"
+ *    into "build an engine" and is what makes G1.5 reachable.
+ *  - ROUND_MULT = [1, 1.35, 1.55]. Round 3 was 2.4x round 1 and is now 1.55x. The
+ *    Audit round is still the hardest round of the shift — it should be — but the
+ *    gap it opens is now small enough that the Audit's RULE is what makes it a boss,
+ *    not the number. Measured, this moves rounds 1 and 2 from "cleared with two
+ *    shipments spare" to genuinely spendable, and it is what pulls the largest
+ *    single-shift share of losses down.
+ *  - Deliberately NOT monotonic across the shift boundary (shift N round 3 = 1.55x
+ *    base is above shift N+1 round 1 = 1.0x base, but shift N+1's own growth term
+ *    puts it back ahead). The dip inside the boundary is the breather after a boss.
+ *    `quotaFor` is monotonic in each argument with the other held fixed, which is
+ *    what api.ts asks for.
+ *  - BASE = 210 against a ~20-part starter crate: a raw 5-part shipment is worth
+ *    ~30, four of them ~120, so shift 1 round 1 is still unclearable without the
+ *    line doing real work. The game states its thesis on turn one. BASE was 300 and
+ *    came down because the game measured far too hard everywhere, not only at the
+ *    Audits — planner 14%, oracle 16.5% against gate bands of 40-60% and 65-88%.
+ *  - Final quota is quotaFor(8, 3) = 11305 before the audit's own quotaMult, 53.8x
+ *    the opening quota. G5.1 wants a p95 of 20x that, which multiplicative content
+ *    can reach and additive content cannot — again by design.
  *  - Rounded to the nearest 5 purely so the number on screen reads as a target and
  *    not as a hash.
  */
-export const QUOTA_BASE = 300;
-export const QUOTA_GROWTH = 1.6;
-export const QUOTA_ROUND_MULT: readonly number[] = [1, 1.5, 2.4];
+export const QUOTA_BASE = 210;
+export const QUOTA_GROWTH = 1.66;
+export const QUOTA_ROUND_MULT: readonly number[] = [1, 1.35, 1.55];
 
 export const STARTING_CREDITS = 4;
 export const STARTER_CRATE_SIZE = 20;
