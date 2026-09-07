@@ -7,8 +7,9 @@
   "scripts": {
     "test": "node --test --experimental-strip-types \"tests/*.test.ts\"",
     "sim": "node --experimental-strip-types src/sim/cli.ts",
-    "dev": "vite web",
-    "build": "vite build web"
+    "dev": "node tools/devserver.mjs",
+    "build": "node tools/build-web.mjs",
+    "build:web": "node tools/build-web.mjs"
   },
   "devDependencies": {}
 }

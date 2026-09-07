@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#12100e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>TAKT</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ================= TITLE ================= -->
+  <section class="screen" id="s-title">
+    <div class="title-top">
+      <h1 class="wordmark">TAKT</h1>
+      <p class="tagline">Junk goes in the left.<br>Something absurd comes out the right.</p>
+    </div>
+    <canvas id="attract"></canvas>
+    <div class="title-bottom">
+      <div class="meta-row" id="title-meta"></div>
+      <button class="btn btn-big" id="btn-play">START A SHIFT</button>
+      <button class="btn btn-ghost" id="btn-how">HOW IT WORKS</button>
+    </div>
+  </section>
+
+  <!-- ================= PLAY ================= -->
+  <section class="screen" id="s-play" hidden>
+    <header id="hud">
+      <div class="hud-row">
+        <div class="chip" id="hud-shift">SHIFT 1 · ROUND 1</div>
+        <div class="chip chip-credit" id="hud-credits">0c</div>
+      </div>
+      <div class="quota">
+        <div class="quota-nums">
+          <span id="hud-score">0</span><span class="quota-sep">/</span><span id="hud-quota">300</span>
+        </div>
+        <div class="bar" id="quota-bar"><i id="hud-bar"></i></div>
+      </div>
+      <div class="audit-banner" id="hud-audit" hidden></div>
+    </header>
+
+    <div id="stage-wrap">
+      <canvas id="stage"></canvas>
+      <div id="order-panel" hidden>
+        <div class="order-head">
+          <div>
+            <div class="order-label">REORDER THE LINE — drag</div>
+            <div class="order-sub" id="order-sub">this batch scores</div>
+          </div>
+          <div class="order-score" id="order-score">—</div>
+        </div>
+        <div id="order-list"></div>
+        <button class="btn btn-wide" id="btn-order-done">DONE</button>
+      </div>
+      <div id="stage-hint" class="stage-hint" hidden></div>
+    </div>
+
+    <div id="sel-strip"></div>
+    <div id="hand"></div>
+
+    <div id="actions">
+      <button class="btn btn-alt" id="btn-scrap">SCRAP <em id="scrap-left">3</em></button>
+      <button class="btn btn-primary" id="btn-ship">SHIP</button>
+      <button class="btn btn-alt" id="btn-order">ORDER</button>
+    </div>
+  </section>
+
+  <!-- ================= SHOP ================= -->
+  <section class="screen" id="s-shop" hidden>
+    <header id="shop-head">
+      <div class="hud-row">
+        <div class="chip" id="shop-title">QUOTA MET</div>
+        <div class="chip chip-credit" id="shop-credits">0c</div>
+      </div>
+      <p class="shop-sub" id="shop-sub"></p>
+    </header>
+    <div id="shop-items"></div>
+    <div id="shop-line"></div>
+    <div id="shop-actions">
+      <button class="btn btn-alt" id="btn-reroll">REROLL 3c</button>
+      <button class="btn btn-alt" id="btn-shop-order">REORDER</button>
+      <button class="btn btn-primary" id="btn-next">NEXT ROUND</button>
+    </div>
+  </section>
+
+  <!-- ================= OVERLAY ================= -->
+  <div id="overlay" hidden><div id="overlay-inner"></div></div>
+</div>
+<script type="module" src="./src/app.ts"></script>
+</body>
+</html>
