@@ -18,6 +18,7 @@ import { drawToken, drawValueTag, fitText, font, poly, roundRect, textCenter } f
 import { TIER_LADDER } from '../../src/content/parts.ts';
 
 const TRANSIT = 0.42;        // fraction of a beat spent travelling to the machine
+const RULE_CARD_H = 26;      // the machine's rule text, printed under the belt as it fires
 
 function ease(t: number): number { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
 function easeOut(t: number): number { return 1 - Math.pow(1 - t, 3); }
@@ -62,6 +63,23 @@ export class Stage {
   private bw = 104;
   private bh = 86;
   private tokSize = 24;
+  // One top-down layout for the whole reel. Everything that floats over the belt —
+  // the rule card, the +N chip, the GAMBLE flash — used to be positioned from the
+  // MACHINE's geometry while its neighbours (the rail, the breakdown heading) were
+  // positioned from fractions of the CANVAS. Once the machinery started being sized
+  // from the canvas too, the two sets of numbers grew into each other and the labels
+  // collided. These fields are now the single source for both.
+  private hudBig = 40;
+  private railY = 0;
+  private railCaptionY = 0;
+  private beltYv = 0;
+  private ruleCardY = 0;
+  private tickerHeaderY = 0;
+  private tickerTopY = 0;
+  /** largest object radius that still clears the machine's name strip */
+  private tokenMax = 30;
+  /** current camera offset, so overlays can be clamped into the visible screen */
+  private camOx = 0;
   private reel: Reel | null = null;
   private t = 0;
   private speed = 1;
@@ -204,12 +222,49 @@ export class Stage {
    * machines, the belt and the parts are all a fraction of the canvas rather than
    * fixed pixel sizes floating in whatever space is left over.
    */
+  /**
+   * Reserve the reel's horizontal bands, top to bottom, before anything is drawn:
+   *
+   *   total → rail bar → rail caption → [+N chip zone] → machine housing → belt
+   *         → rule card → breakdown heading → breakdown rows
+   *
+   * The machine housing height is then whatever is LEFT between the chip zone and the
+   * belt, rather than a fraction of the canvas that happens to fit today. That is the
+   * fix for both reported collisions: a taller canvas can no longer push the housing
+   * up through the rail, and the rule card can no longer grow down into the heading.
+   */
   private measure(): void {
-    // width decides how many stations are on screen at once (two, plus a hint of the
-    // next); height decides how tall the machinery stands.
+    this.hudBig = Math.min(this.h * 0.135, this.w * 0.23);
+    this.railY = Math.round(this.hudBig * 1.55 + 8);
+    this.railCaptionY = this.railY + 20;
+
+    // the +N chip rises 26px from 16px above the housing, so the housing may not start
+    // any higher than the caption plus that whole zone
+    const housingCeiling = this.railCaptionY + 56;
+    this.beltYv = Math.round(Math.max(
+      Math.min(this.h * 0.5, this.h * 0.6),
+      Math.min(this.h * 0.6, housingCeiling + 120),
+    ));
+
     this.bw = Math.max(92, Math.min(140, this.w * 0.3));
-    this.bh = Math.max(64, Math.min(152, this.h * 0.21));
+    this.bh = Math.max(56, Math.min(
+      Math.max(64, Math.min(152, this.h * 0.21)),
+      this.beltYv - 8 - housingCeiling,
+    ));
     this.step = Math.max(186, this.bw * 1.58);
+
+    // The parts travel through the LOWER part of the housing; the name and its family
+    // tag own the upper part. Cap the object size so the two never share a pixel —
+    // on a short canvas the housing is small and the objects have to give way.
+    const namePx = Math.min(19, this.bh * 0.2);
+    const nameStrip = namePx * 2.05 + 8;
+    // the 8px is a real gap, not a shared boundary — without it the tallest object
+    // grazes the family-tag row
+    this.tokenMax = Math.max(13, (this.bh - 9 - nameStrip - 8) / 2.55);
+
+    this.ruleCardY = this.beltYv + 16;
+    this.tickerHeaderY = this.ruleCardY + RULE_CARD_H + 18;
+    this.tickerTopY = this.tickerHeaderY + 14;
   }
 
   private stationX(i: number): number { return i * this.step; }
@@ -237,8 +292,8 @@ export class Stage {
 
     this.measure();
     const r = this.reel;
-    const beltY = Math.round(this.h * 0.5);
-    const size = Math.max(15, Math.min(36, this.h * 0.05));
+    const beltY = this.beltYv;
+    const size = Math.max(13, Math.min(36, this.h * 0.05, this.tokenMax));
 
     let focusStation = 0;
     let beat: Beat | null = null;
@@ -257,16 +312,18 @@ export class Stage {
     const ox = Math.round(this.w * 0.5 - this.camX + (shakeK > 0 ? (Math.random() - 0.5) * shakeK * 2 : 0));
     const oy = shakeK > 0 ? (Math.random() - 0.5) * shakeK : 0;
 
+    this.camOx = ox;
     ctx.save();
     ctx.translate(ox, oy);
 
     const nStations = this.stations.length + 2; // intake + machines/audit + crate
     this.drawBelt(beltY, ox);
-    this.drawIntake(beltY, size);
+    this.drawIntake(beltY, beat !== null && beat.kind === 'crate' && u > beat.durationMs * 0.34);
+    const revealing = beat !== null && beat.kind === 'crate' && u > beat.durationMs * 0.34;
     for (let i = 0; i < this.stations.length; i++) {
       this.drawMachine(i + 1, this.stations[i], beltY, beat, u);
     }
-    this.drawCrate(nStations - 1, beltY, beat, u);
+    this.drawCrate(nStations - 1, beltY, beat, u, revealing);
 
     if (beat !== null) this.drawBatch(r, beat, u, beltY, size);
 
@@ -276,8 +333,8 @@ export class Stage {
       this.drawPlayHud(r, beat, u);
       // the rail is navigation; during the reveal it is just something else on top
       // of the object, so it steps out of the way
-      if (beat.kind !== 'crate') this.drawRail(r, beat);
-      this.drawTicker(r, beat, beltY);
+      if (beat.kind !== 'crate') this.drawRail(r, beat, this.holdingNow(beat, u));
+      this.drawTicker(r, beat);
     }
   }
 
@@ -286,13 +343,13 @@ export class Stage {
    * that "how much further" is a real question, and it is the cheapest possible
    * answer to it.
    */
-  private drawRail(r: Reel, beat: Beat): void {
+  private drawRail(r: Reel, beat: Beat, holding: boolean): void {
     const ctx = this.ctx;
     const n = r.beats.length;
     const pad = 18;
     const gap = 4;
     const cw = (this.w - pad * 2 - gap * (n - 1)) / n;
-    const y = Math.round(this.h * 0.215);
+    const y = this.railY;
     for (let i = 0; i < n; i++) {
       const x = pad + i * (cw + gap);
       const bt = r.beats[i];
@@ -302,8 +359,24 @@ export class Stage {
       roundRect(ctx, x, y, cw, i === beat.index ? 7 : 4, 2);
       ctx.fill();
     }
+    // The gamble flash lives in the caption slot instead of being dropped on top of
+    // the rail from the HUD — one label, one place, never two things in one band.
+    if (holding) {
+      ctx.save();
+      ctx.globalAlpha = 0.55 + 0.45 * Math.sin(this.t / 50);
+      textCenter(ctx, '◆ GAMBLE', this.w * 0.5, this.railCaptionY, 13, PALETTE.gold);
+      ctx.restore();
+      return;
+    }
     textCenter(ctx, beat.kind === 'crate' ? 'THE CRATE' : `STATION ${beat.index + 1} OF ${n}`,
-      this.w * 0.5, y + 22, 10, PALETTE.dim);
+      this.w * 0.5, this.railCaptionY, 10, PALETTE.dim);
+  }
+
+  /** true while a gamble machine is holding its breath before the reveal */
+  private holdingNow(beat: Beat, u: number): boolean {
+    if (beat.kind !== 'machine' || beat.holdMs <= 0) return false;
+    const fireAt = (beat.durationMs - beat.holdMs) * TRANSIT;
+    return u >= fireAt && u < fireAt + beat.holdMs;
   }
 
   /**
@@ -311,7 +384,7 @@ export class Stage {
    * time the object lands, the whole explanation of the number is already on screen
    * — which is the one thing this build exists to make true.
    */
-  private drawTicker(r: Reel, beat: Beat, beltY: number): void {
+  private drawTicker(r: Reel, beat: Beat): void {
     const ctx = this.ctx;
     interface Row { tag: string; name: string; delta: number; landed: boolean; cur: boolean; fired: boolean }
     const rows: Row[] = [{
@@ -329,12 +402,14 @@ export class Stage {
         landed, cur: b.index === beat.index, fired: b.fired,
       });
     }
-    const top = beltY + Math.max(48, Math.min(58, this.h * 0.075));
-    const avail = this.h - top - 24;
+    const top = this.tickerTopY;
+    // leave the bottom clear for the "tap to speed up" hint, which is DOM and sits
+    // over the canvas
+    const avail = this.h - top - 34;
     const rowH = Math.max(15, Math.min(54, avail / rows.length));
     if (rowH < 14) return;
     const peak = Math.max(1, ...rows.map((b) => Math.abs(b.delta)));
-    textCenter(ctx, 'WHY THE NUMBER MOVED', this.w * 0.5, top - 10, 10, PALETTE.line);
+    textCenter(ctx, 'WHY THE NUMBER MOVED', this.w * 0.5, this.tickerHeaderY, 10, PALETTE.line);
     let y = top + (avail - rowH * rows.length) * 0.28 + rowH * 0.5;
     ctx.textBaseline = 'middle';
     for (const b of rows) {
@@ -572,7 +647,7 @@ export class Stage {
     ctx.stroke();
   }
 
-  private drawIntake(beltY: number, size: number): void {
+  private drawIntake(beltY: number, hideLabel: boolean): void {
     const ctx = this.ctx;
     const x = this.stationX(0);
     const w = this.bw * 0.8;
@@ -585,7 +660,7 @@ export class Stage {
     ctx.stroke();
     ctx.fillStyle = PALETTE.bg;
     ctx.fillRect(x - w / 2 + 12, beltY - 6 - h + 12, w - 24, h - 24);
-    textCenter(ctx, 'INTAKE', x, beltY + 22, 10, PALETTE.dim);
+    if (!hideLabel) textCenter(ctx, 'INTAKE', x, beltY + 22, 10, PALETTE.dim);
   }
 
   private drawMachine(station: number, st: StationView, beltY: number, beat: Beat | null, u: number): void {
@@ -653,9 +728,17 @@ export class Stage {
     if (holding) textCenter(ctx, '?', x, top + bh * 0.55, bh * 0.4, PALETTE.gold);
     ctx.restore();
 
-    if (active && fired && beat !== null && beat.fired && !holding) {
-      this.drawRuleCard(x, beltY + 26, beat, clamp01((sinceFire - hold) / 200));
-      if (beat.delta !== 0) this.drawDeltaChip(x, top - 16, beat.delta, clamp01((sinceFire - hold) / 420));
+    if (active && fired && beat !== null) {
+      // During a gamble's hold the card is already up at full strength: the player
+      // reads the terms of the bet, and *then* it resolves. (The '?' this replaces
+      // was drawn inside the housing, where the parts pass, and was never visible.)
+      if (holding) this.drawRuleCard(x, this.ruleCardY, beat, 1);
+      else if (beat.fired) {
+        this.drawRuleCard(x, this.ruleCardY, beat, clamp01((sinceFire - hold) / 200));
+        if (beat.delta !== 0) {
+          this.drawDeltaChip(x, top - 16, beat.delta, clamp01((sinceFire - hold) / 420));
+        }
+      }
     }
   }
 
@@ -673,16 +756,31 @@ export class Stage {
     const ctx = this.ctx;
     ctx.save();
     ctx.globalAlpha = k;
-    ctx.font = font(12, 700);
+    // The rule is the explanation; on a gamble it is the terms of the bet. Shrink the
+    // type to fit the screen before resorting to an ellipsis.
+    const maxW = this.w - 22;
+    let text = beat.text;
+    let px = 12;
+    ctx.font = font(px, 700);
+    while (px > 9 && ctx.measureText(text).width + 24 > maxW) {
+      px -= 1;
+      ctx.font = font(px, 700);
+    }
+    while (text.length > 8 && ctx.measureText(text).width + 24 > maxW) {
+      text = text.slice(0, text.length - 2) + '…';
+    }
     ctx.textAlign = 'center';
-    const text = beat.text.length > 46 ? beat.text.slice(0, 44) + '…' : beat.text;
-    const w = Math.max(120, ctx.measureText(text).width + 24);
+    const w = Math.max(120, Math.min(maxW, ctx.measureText(text).width + 24));
     ctx.fillStyle = PALETTE.panelHi;
-    roundRect(ctx, x - w / 2, y + (1 - k) * 8, w, 26, 6);
+    // clamp into the visible screen: the firing machine can be near an edge, and a
+    // card that runs off the side is a card nobody reads
+    const left = -this.camOx + 11 + w / 2;
+    x = Math.max(left, Math.min(-this.camOx + this.w - 11 - w / 2, x));
+    roundRect(ctx, x - w / 2, y + (1 - k) * 8, w, RULE_CARD_H, 6);
     ctx.fill();
     ctx.fillStyle = PALETTE.cream;
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, x, y + 13 + (1 - k) * 8);
+    ctx.fillText(text, x, y + RULE_CARD_H / 2 + (1 - k) * 8);
     ctx.restore();
   }
 
@@ -698,7 +796,7 @@ export class Stage {
     ctx.restore();
   }
 
-  private drawCrate(station: number, beltY: number, beat: Beat | null, u: number): void {
+  private drawCrate(station: number, beltY: number, beat: Beat | null, u: number, hideLabel: boolean): void {
     const ctx = this.ctx;
     const x = this.stationX(station);
     const active = beat !== null && beat.kind === 'crate';
@@ -718,7 +816,7 @@ export class Stage {
     ctx.moveTo(x - w / 2, beltY - 6 - h * 0.45); ctx.lineTo(x + w / 2, beltY - 6 - h * 0.45);
     ctx.moveTo(x, beltY - 6 - h); ctx.lineTo(x, beltY - 6 - h * 0.45);
     ctx.stroke();
-    textCenter(ctx, 'CRATE', x, beltY + 22, 10, PALETTE.dim);
+    if (!hideLabel) textCenter(ctx, 'CRATE', x, beltY + 22, 10, PALETTE.dim);
     ctx.restore();
   }
 
@@ -872,9 +970,8 @@ export class Stage {
     // The object gets the band between the running total and the breakdown, whole:
     // a Monument cropped by an edge, or sitting under the score, is the one frame
     // this build cannot afford.
-    const hudBottom = Math.min(this.h * 0.135, this.w * 0.23) * 1.6;
-    const bandTop = hudBottom;
-    const bandBot = beltY + Math.max(48, Math.min(58, this.h * 0.075)) - 12;
+    const bandTop = this.railY;
+    const bandBot = this.tickerHeaderY - 14;
     const bandH = Math.max(90, bandBot - bandTop);
     const room = Math.min(this.w * 0.3, (bandH - 30) / 3.0);
     const big = Math.max(30, room * (0.7 + 0.3 * r.awe));
@@ -888,6 +985,13 @@ export class Stage {
     ctx.fillStyle = PALETTE.bg;
     ctx.fillRect(cx - this.w * 1.5, -this.h, this.w * 3, this.h * 3);
     ctx.restore();
+
+    // Everything from here on is confined to the reveal band: the rays are decoration
+    // and must not climb into the running total.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(cx - this.w * 1.5, bandTop, this.w * 3, bandBot - bandTop);
+    ctx.clip();
 
     // rays for anything genuinely absurd
     if (r.awe > 0.55) {
@@ -918,6 +1022,7 @@ export class Stage {
     textCenter(ctx, tierLabel, cx, nameY + Math.max(14, big * 0.26), Math.max(10, big * 0.13),
       p.tier >= 0 ? TIER_COLORS[p.tier] : PALETTE.dim);
     ctx.restore();
+    ctx.restore();
   }
 
   // -------------------------------------------------------------------------
@@ -943,16 +1048,6 @@ export class Stage {
     textCenter(ctx, 'SHIPMENT', cx, big * 0.36, Math.max(10, big * 0.17), PALETTE.dim);
     const grow = beat.kind === 'crate' ? 1.06 : 1;
     textCenter(ctx, fmt(shown), cx, big * 1.05, big * grow, PALETTE.cream);
-    if (beat.kind === 'machine' && beat.holdMs > 0) {
-      const transitDur = (beat.durationMs - beat.holdMs) * TRANSIT;
-      const s = u - transitDur;
-      if (s >= 0 && s < beat.holdMs) {
-        ctx.save();
-        ctx.globalAlpha = 0.55 + 0.45 * Math.sin(s / 50);
-        textCenter(ctx, 'GAMBLE', cx, big * 1.7, Math.max(11, big * 0.24), PALETTE.gold);
-        ctx.restore();
-      }
-    }
   }
 
   // -------------------------------------------------------------------------
