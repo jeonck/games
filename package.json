@@ -5,7 +5,7 @@
   "type": "module",
   "description": "TAKT - a factory-line roguelike",
   "scripts": {
-    "test": "node --test --experimental-strip-types tests/",
+    "test": "node --test --experimental-strip-types \"tests/*.test.ts\"",
     "sim": "node --experimental-strip-types src/sim/cli.ts",
     "dev": "vite web",
     "build": "vite build web"
