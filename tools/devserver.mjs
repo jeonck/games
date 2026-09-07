@@ -42,7 +42,13 @@ const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', 'http://localhost');
     let path = decodeURIComponent(url.pathname);
-    if (path === '/') path = '/web/index.html';
+    // Redirect rather than rewrite: index.html links its assets relatively
+    // (./styles.css, ./src/app.ts), so the browser must resolve them against
+    // /web/. Serving web/index.html *at* / makes every one of those 404.
+    if (path === '/') {
+      res.writeHead(302, { location: '/web/' });
+      return res.end();
+    }
     if (path.endsWith('/')) path += 'index.html';
 
     const full = normalize(join(ROOT, path));

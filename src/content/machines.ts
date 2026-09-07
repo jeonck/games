@@ -58,6 +58,11 @@ function TIERS(n: number): string {
   return n === 1 ? '1 tier' : `${n} tiers`;
 }
 
+/** player-facing copy: "1 part" / "2 parts" — never "1 parts". */
+function PARTS(n: number): string {
+  return n === 1 ? 'part' : `${n} parts`;
+}
+
 /** clamp a value: integer, finite, >= 0 */
 function cv(n: number): number {
   if (!Number.isFinite(n)) return MAX_VALUE;
@@ -1007,7 +1012,7 @@ const TRANSMUTATION: MachineDef[] = [
     }),
 
   mk('destabilize', 'Destabiliser', 'transmutation', 'uncommon', 7,
-    (l) => `the first ${L(l, 1, 2, 3)} parts become volatile, x${L(l, 1.8, 2.1, 2.4)} mult, and move to the back`,
+    (l) => `the first ${PARTS(L(l, 1, 2, 3))} become volatile, x${L(l, 1.8, 2.1, 2.4)} mult, and move to the back`,
     (b, _c, l) => {
       const k = Math.min(L(l, 1, 2, 3), b.length), f = L(l, 1.8, 2.1, 2.4);
       const out: Batch = [];
@@ -1017,7 +1022,7 @@ const TRANSMUTATION: MachineDef[] = [
     }),
 
   mk('calibrate', 'Calibrator', 'transmutation', 'uncommon', 7,
-    (l) => `the last ${L(l, 1, 2, 3)} parts become precision, +${L(l, 16, 26, 38)} each`,
+    (l) => `the last ${PARTS(L(l, 1, 2, 3))} become precision, +${L(l, 16, 26, 38)} each`,
     (b, _c, l) => {
       const k = L(l, 1, 2, 3), n = L(l, 16, 26, 38);
       return all(b, (p, i) => (i >= b.length - k ? addV(retag(p, 'precision'), n) : cp(p)));
@@ -1107,7 +1112,7 @@ const TRANSMUTATION: MachineDef[] = [
 
 const IDENTITY: MachineDef[] = [
   mk('foundry', 'Foundry', 'transmutation', 'common', 6,
-    (l) => `promote the first ${L(l, 1, 2, 2)} parts one tier`,
+    (l) => `promote the first ${PARTS(L(l, 1, 2, 2))} one tier`,
     (b, _c, l) => { const k = L(l, 1, 2, 2); return all(b, (p, i) => (i < k ? promote(p, 1) : cp(p))); }),
 
   mk('kiln', 'Kiln', 'transmutation', 'uncommon', 9,
