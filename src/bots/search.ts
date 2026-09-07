@@ -44,8 +44,8 @@ export interface SearchConfig {
 }
 
 export const PLANNER_SEARCH: SearchConfig = {
-  poolCap: 8, screenOrders: 2, deepSubsets: 10, swapPasses: 2, finalists: 8,
-  lineProbes: 8, linePasses: 3,
+  poolCap: 8, screenOrders: 1, deepSubsets: 8, swapPasses: 2, finalists: 8,
+  lineProbes: 8, linePasses: 2,
 };
 
 /**
@@ -67,6 +67,15 @@ export interface SearchResult {
   secondScore: number;
   /** (best - second) / best * 100, or NaN when there is no second candidate */
   marginPct: number;
+  /**
+   * The same margin, but against the best candidate that ships a DIFFERENT SET of
+   * parts rather than merely a different order of the same set. `marginPct` is what
+   * G6.1 asks for literally, and it is dominated by exact ties between orderings
+   * that happen to score the same; this one asks the other question — "was there a
+   * different shipment that was nearly as good" — and both are reported so the
+   * reader can see which one G6.1 is actually about.
+   */
+  subsetMarginPct: number;
   /** distinct ordered selections scored */
   evaluated: number;
   /** the top orderings found, best first — reused as line-search probes */
@@ -74,7 +83,8 @@ export interface SearchResult {
 }
 
 const EMPTY: SearchResult = {
-  best: [], bestScore: 0, secondScore: NaN, marginPct: NaN, evaluated: 0, top: [],
+  best: [], bestScore: 0, secondScore: NaN, marginPct: NaN, subsetMarginPct: NaN,
+  evaluated: 0, top: [],
 };
 
 function popcount(x: number): number {
@@ -227,6 +237,25 @@ export function searchShipment(
     ? ((best.score - second.score) / best.score) * 100
     : NaN;
 
+  const subsetKey = (xs: number[]): string => xs.slice().sort((a, b) => a - b).join(',');
+  const bestSubset = subsetKey(best.order);
+  let subsetSecond = NaN;
+  for (const c of finalists) {
+    if (subsetKey(c.order) === bestSubset) continue;
+    subsetSecond = c.score;
+    break;
+  }
+  if (!Number.isFinite(subsetSecond)) {
+    for (const c of cands) {
+      if (subsetKey(c.order) === bestSubset) continue;
+      subsetSecond = c.score;
+      break;
+    }
+  }
+  const subsetMarginPct = Number.isFinite(subsetSecond) && best.score > 0
+    ? ((best.score - subsetSecond) / best.score) * 100
+    : NaN;
+
   const top: number[][] = [];
   const seen = new Set<string>();
   for (const c of cands) {
@@ -242,6 +271,7 @@ export function searchShipment(
     bestScore: best.score,
     secondScore,
     marginPct,
+    subsetMarginPct,
     evaluated: ev.evaluations - before,
     top,
   };

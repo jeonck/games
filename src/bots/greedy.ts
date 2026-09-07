@@ -83,7 +83,9 @@ export class GreedyBot implements Bot {
     // Greedy does not compute a runner-up: G6.1 is read off the planner tier, and
     // emitting a margin from a one-order search would describe the search, not the
     // decision. Cheap tiers emit no G6 samples by design (see gate.ts).
-    const out: ShipmentDecision = { indices: best, marginPct: NaN, evaluated };
+    const out: ShipmentDecision = {
+      indices: best, marginPct: NaN, subsetMarginPct: NaN, evaluated,
+    };
     this.cachedSig = sig;
     this.cached = out;
     return out;
@@ -120,6 +122,10 @@ export class GreedyBot implements Bot {
       if (it.cost < bestCost) { bestCost = it.cost; bestIdx = i; }
     }
     return bestIdx >= 0 ? { kind: 'buy', index: bestIdx } : { kind: 'done' };
+  }
+
+  refineLine(_s: RunState): number[] | null {
+    return null;
   }
 
   chooseReorder(_s: RunState, _arrival: Machine[]): ReorderDecision | null {

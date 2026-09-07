@@ -18,7 +18,6 @@
 // coin flip it is about to be dealt. See ev.ts.
 
 import type { Machine, RunState } from '../engine/types.ts';
-import { PARTS_PER_SHIPMENT } from '../engine/types.ts';
 import type { Shop, ShopItem } from '../engine/api.ts';
 import { buy, nextRound } from '../engine/run.ts';
 import { Evaluator } from './ev.ts';
@@ -38,13 +37,16 @@ import { lineCreditYield } from './credits.ts';
  * later, better shop is a live option rather than something the bot can never do.
  * It is NOT tuned against the gate — see the report.
  */
-export const CREDIT_COST_WEIGHT = 0.01;
+export const CREDIT_COST_WEIGHT = 0.02;
 
 /** A redraw must beat the hand in front of you by this much to be worth a scrap. */
 const SCRAP_MARGIN = 1.08;
 
 /** Redraws sampled when pricing one scrap. */
 const SCRAP_SAMPLES = 2;
+
+/** Probes used by the cheap in-round line refinement. */
+const REFINE_PROBES = 4;
 
 /** Partners tried per enabling candidate when pricing a pair. */
 const PAIR_PARTNERS = 4;
@@ -68,6 +70,8 @@ export interface PlannerOptions extends Partial<EvOptions> {
   shopBudget?: number;
   /** price of money: how much next-round value one credit must buy to be spent */
   creditWeight?: number;
+  /** preview budget for the per-shipment line refinement */
+  refineBudget?: number;
 }
 
 export class PlannerBot implements Bot {
@@ -78,18 +82,22 @@ export class PlannerBot implements Bot {
   protected lineBudget: number;
   protected shopBudget: number;
   protected creditWeight: number;
+  protected refineBudget: number;
   private cachedSig = '';
   private cached: (ShipmentDecision & { score: number }) | null = null;
   /** rollout seeds are per-run and independent of the run's own stream */
   protected rolloutBase = 1;
 
   constructor(opts: PlannerOptions = {}) {
-    const { search, shipmentBudget, lineBudget, shopBudget, creditWeight, ...ev } = opts;
+    const {
+      search, shipmentBudget, lineBudget, shopBudget, creditWeight, refineBudget, ...ev
+    } = opts;
     this.creditWeight = creditWeight ?? CREDIT_COST_WEIGHT;
     this.cfg = search ?? PLANNER_SEARCH;
     this.shipmentBudget = shipmentBudget ?? 4000;
     this.lineBudget = lineBudget ?? 4000;
     this.shopBudget = shopBudget ?? 400;
+    this.refineBudget = opts.refineBudget ?? 900;
     this.ev = new Evaluator({ budget: Infinity, ...ev });
   }
 
@@ -114,8 +122,8 @@ export class PlannerBot implements Bot {
     this.ev.begin(s);
     const res = searchShipment(this.ev, s, s.line, this.cfg);
     const out = {
-      indices: res.best, marginPct: res.marginPct, evaluated: res.evaluated,
-      score: res.bestScore,
+      indices: res.best, marginPct: res.marginPct, subsetMarginPct: res.subsetMarginPct,
+      evaluated: res.evaluated, score: res.bestScore,
     };
     this.cachedSig = sig;
     this.cached = out;
@@ -124,7 +132,10 @@ export class PlannerBot implements Bot {
 
   chooseShipment(s: RunState): ShipmentDecision {
     const r = this.shipmentSearch(s);
-    return { indices: r.indices, marginPct: r.marginPct, evaluated: r.evaluated };
+    return {
+      indices: r.indices, marginPct: r.marginPct,
+      subsetMarginPct: r.subsetMarginPct, evaluated: r.evaluated,
+    };
   }
 
   /**
@@ -366,6 +377,41 @@ export class PlannerBot implements Bot {
     // leaves enough behind to act on what it turns up.
     if (s.credits >= shop.rerollCost * REROLL_RESERVE) return { kind: 'reroll' };
     return { kind: 'done' };
+  }
+
+  /**
+   * A cheap in-round line refinement, run before every shipment.
+   *
+   * The round-start reorder is solved against the hand dealt at the round's start;
+   * four shipments later the hand is different and, on an Audit round, the answer
+   * can be different too. `reorderLine` is free and legal at any time, so a player
+   * who cares will nudge the line between shipments — and a planner that does not
+   * is weaker than the tier it is supposed to stand for. This is a WARM-STARTED
+   * single swap-descent pass from the current order against a handful of probes,
+   * about a tenth the cost of the round-start search, not a re-solve.
+   */
+  refineLine(s: RunState): number[] | null {
+    if (s.line.length < 2 || s.hand.length === 0) return null;
+    const ev = this.ev;
+    const saved = ev.opts.budget;
+    (ev.opts as { budget: number }).budget = this.refineBudget;
+    ev.begin(s);
+    try {
+      const cfg: SearchConfig = { ...this.cfg, lineProbes: REFINE_PROBES, linePasses: 1 };
+      // Probes come from the CHEAP search, not the planner's own. Building them
+      // with the full screen costs more than the refinement it feeds — 500 previews
+      // to save 100 — and a probe only has to be a plausible shipment, not the
+      // best one.
+      const probes = lineProbes(ev, s, s.line, { ...FAST_SEARCH, lineProbes: REFINE_PROBES });
+      const res = searchLine(ev, s, s.line, probes, cfg);
+      let moved = false;
+      for (let i = 0; i < res.perm.length; i++) if (res.perm[i] !== i) moved = true;
+      return moved ? res.perm : null;
+    } finally {
+      (ev.opts as { budget: number }).budget = saved;
+      this.cachedSig = '';   // the line moved; the shipment cache is stale
+      this.cached = null;
+    }
   }
 
   // -- reorder ------------------------------------------------------------

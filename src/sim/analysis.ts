@@ -189,3 +189,46 @@ export function dominance(tiers: readonly TierMetrics[]): DominanceCheck {
   const runs = Math.min(...BOT_TIERS.map((b) => by.get(b)?.runs ?? 0));
   return { ok: inversions.length === 0, rates, gaps, inversions, runs };
 }
+
+export interface MarginStats {
+  /** G6.1 as gate.ts computes it: 2nd-best ordered selection within 10% of best */
+  closeCallStrict: number;
+  /** the same over shipments that ship a DIFFERENT SET of parts */
+  closeCallSubset: number;
+  /** shipments where the 2nd-best ordered selection scores EXACTLY the best */
+  tieRate: number;
+  nStrict: number;
+  nSubset: number;
+}
+
+/**
+ * G6.1 reads "2nd-best within 10% of best" off `decisionMarginPct`, whose runner-up
+ * is the next ORDERED SELECTION. In a game where a shipment can be padded with a
+ * part the line scores at zero, that runner-up is very often an exact tie, and the
+ * metric saturates for a reason that has nothing to do with whether the decision was
+ * interesting. Both readings are reported.
+ */
+export function marginStats(records: readonly HarnessRecord[]): MarginStats {
+  let strict = 0; let strictN = 0; let ties = 0;
+  let sub = 0; let subN = 0;
+  for (const r of records) {
+    for (const m of r.decisionMarginPct ?? []) {
+      if (!Number.isFinite(m)) continue;
+      strictN++;
+      if (m <= 10) strict++;
+      if (m <= 1e-9) ties++;
+    }
+    for (const m of r.decisionMarginSubsetPct ?? []) {
+      if (!Number.isFinite(m)) continue;
+      subN++;
+      if (m <= 10) sub++;
+    }
+  }
+  return {
+    closeCallStrict: strictN > 0 ? strict / strictN : NaN,
+    closeCallSubset: subN > 0 ? sub / subN : NaN,
+    tieRate: strictN > 0 ? ties / strictN : NaN,
+    nStrict: strictN,
+    nSubset: subN,
+  };
+}

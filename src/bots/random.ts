@@ -37,7 +37,9 @@ export class RandomBot implements Bot {
     const pool: number[] = new Array(n);
     for (let i = 0; i < n; i++) pool[i] = i;
     const shuffled = this.rng.shuffle(pool);
-    return { indices: shuffled.slice(0, size), marginPct: NaN, evaluated: 0 };
+    return {
+      indices: shuffled.slice(0, size), marginPct: NaN, subsetMarginPct: NaN, evaluated: 0,
+    };
   }
 
   chooseScrap(s: RunState): number[] | null {
@@ -54,6 +56,10 @@ export class RandomBot implements Bot {
     if (options.length === 0) return { kind: 'done' };
     if (this.rng.next() >= BUY_CHANCE) return { kind: 'done' };
     return { kind: 'buy', index: this.rng.pick(options) };
+  }
+
+  refineLine(_s: RunState): number[] | null {
+    return null;
   }
 
   chooseReorder(_s: RunState, _arrival: Machine[]): ReorderDecision | null {

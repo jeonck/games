@@ -61,7 +61,8 @@ interface Node {
   state: RunState;
   items: ShopItem[];
   buys: ShopItem[];
-  value: number;
+  /** one entry per rollout seed */
+  value: number[];
 }
 
 export class OracleBot extends PlannerBot {
@@ -77,11 +78,11 @@ export class OracleBot extends PlannerBot {
 
   constructor(opts: OracleOptions = {}) {
     super(opts);
-    this.horizon = opts.horizon ?? 2;
+    this.horizon = opts.horizon ?? 3;
     this.beamWidth = opts.beamWidth ?? 2;
-    this.beamDepth = opts.beamDepth ?? 3;
-    this.branch = opts.branch ?? 3;
-    this.rollouts = opts.rollouts ?? 1;
+    this.beamDepth = opts.beamDepth ?? 2;
+    this.branch = opts.branch ?? 2;
+    this.rollouts = opts.rollouts ?? 2;
     this.rolloutBudget = opts.rolloutBudget ?? 2500;
   }
 
@@ -149,19 +150,39 @@ export class OracleBot extends PlannerBot {
     return value;
   }
 
-  private rolloutValue(from: RunState, seed: number): number {
+  /** One value per rollout seed, kept separate so candidates can be compared PAIRED. */
+  private rolloutValues(from: RunState, seed: number): number[] {
     const ev = this.ev;
     const saved = ev.opts.budget;
     (ev.opts as { budget: number }).budget = this.rolloutBudget;
     try {
-      let total = 0;
+      const out: number[] = new Array(this.rollouts);
       for (let r = 0; r < this.rollouts; r++) {
-        total += this.rolloutOnce(from, (seed + r * 0x9e3779b1) >>> 0);
+        out[r] = this.rolloutOnce(from, (seed + r * 0x9e3779b1) >>> 0);
       }
-      return total / this.rollouts;
+      return out;
     } finally {
       (ev.opts as { budget: number }).budget = saved;
     }
+  }
+
+  /**
+   * Does `cand` beat `incumbent` well enough to act on?
+   *
+   * Both were rolled out on the SAME seeds, so the comparison is paired. A candidate
+   * has to win on the mean by a margin AND win on every individual rollout — a
+   * three-round rollout with a cheap in-rollout policy is a biased, noisy instrument,
+   * and at 20,000 runs an oracle that overrode the planner on noise-sized differences
+   * came out 0.54pp BELOW it. That inversion is a bug in this file, not a fact about
+   * the game, and this is the fix.
+   */
+  private beats(cand: number[], incumbent: number[]): boolean {
+    let sum = 0;
+    for (let i = 0; i < cand.length; i++) {
+      if (!(cand[i] > incumbent[i])) return false;
+      sum += cand[i] - incumbent[i];
+    }
+    return sum / cand.length > BEAM_MARGIN;
   }
 
   // -- beam ---------------------------------------------------------------
@@ -173,9 +194,9 @@ export class OracleBot extends PlannerBot {
     if (s.shift >= 8 && s.round >= ROUNDS_PER_SHIFT) return [];
 
     const root: Node = {
-      state: cloneRun(s, seed), items: shop.items.slice(), buys: [], value: 0,
+      state: cloneRun(s, seed), items: shop.items.slice(), buys: [], value: [],
     };
-    root.value = this.rolloutValue(root.state, seed);
+    root.value = this.rolloutValues(root.state, seed);
     let best = root;
 
     // THE PLANNER'S OWN PLAN IS ALWAYS A CANDIDATE. The oracle is defined as
@@ -184,7 +205,7 @@ export class OracleBot extends PlannerBot {
     // basket. Without this the oracle loses to the planner on the shop alone, which
     // is a bot bug rather than a fact about the game.
     const plan: Node = {
-      state: cloneRun(s, seed), items: shop.items.slice(), buys: [], value: -Infinity,
+      state: cloneRun(s, seed), items: shop.items.slice(), buys: [], value: [],
     };
     for (let step = 0; step < this.beamDepth + 2; step++) {
       const view: Shop = { items: plan.items, rerollCost: shop.rerollCost };
@@ -196,13 +217,11 @@ export class OracleBot extends PlannerBot {
       plan.buys.push(item);
     }
     if (plan.buys.length > 0) {
-      plan.value = this.rolloutValue(plan.state, seed);
+      plan.value = this.rolloutValues(plan.state, seed);
       best = plan;
+      // "Buy nothing" has to earn the wheel from the planner's plan too.
+      if (this.beats(root.value, plan.value)) best = root;
     }
-    // A two-round rollout is a noisy instrument. Overriding the planner's move on
-    // a noise-sized difference makes the oracle WORSE than the planner about as
-    // often as better, so the beam has to win by a margin to take the wheel.
-    if (root.value > best.value + BEAM_MARGIN) best = root;
 
     let beam: Node[] = [root];
 
@@ -225,14 +244,19 @@ export class OracleBot extends PlannerBot {
           const item = copy.items[i];
           if (!buy(st, copy, i)) continue;
           children.push({
-            state: st, items: copy.items, buys: node.buys.concat([item]), value: -Infinity,
+            state: st, items: copy.items, buys: node.buys.concat([item]), value: [],
           });
         }
       }
       if (children.length === 0) break;
-      for (const ch of children) ch.value = this.rolloutValue(ch.state, seed);
-      children.sort((a, b) => b.value - a.value);
-      if (children[0].value > best.value + BEAM_MARGIN) best = children[0];
+      for (const ch of children) ch.value = this.rolloutValues(ch.state, seed);
+      const mean = (xs: number[]): number => {
+        let t = 0;
+        for (const x of xs) t += x;
+        return xs.length > 0 ? t / xs.length : -Infinity;
+      };
+      children.sort((a, b) => mean(b.value) - mean(a.value));
+      if (this.beats(children[0].value, best.value)) best = children[0];
       beam = children.slice(0, this.beamWidth);
     }
     return best.buys;
@@ -249,6 +273,11 @@ export class OracleBot extends PlannerBot {
       this.plan.shift();
       if (idx >= 0 && affordable(s, shop).includes(idx)) return { kind: 'buy', index: idx };
     }
-    return { kind: 'done' };
+    // The beam decides WHAT TO BUY. It never evaluates a reroll — a reroll is an
+    // expectation over a shop nobody has seen — so once the plan is spent, the
+    // planner's reroll rule still applies. Without this the oracle silently LOST the
+    // planner's rerolling, which is most of how it managed to finish below it.
+    const fallback = super.chooseShop(s, shop);
+    return fallback.kind === 'reroll' ? fallback : { kind: 'done' };
   }
 }

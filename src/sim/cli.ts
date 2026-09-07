@@ -34,7 +34,7 @@ import type { HarnessRecord } from './harness.ts';
 import { poolSize, runPool } from './pool.ts';
 import type { BotName } from './telemetry.ts';
 import {
-  auditStats, coverage, dominance, optOrderSplit, roundTypeLosses,
+  auditStats, coverage, dominance, marginStats, optOrderSplit, roundTypeLosses,
 } from './analysis.ts';
 
 const ALL: BotName[] = ['random', 'greedy', 'planner', 'oracle'];
@@ -138,6 +138,20 @@ async function main(): Promise<void> {
   md.push('');
 
   // --- losses by round type ----------------------------------------------
+  const mg = marginStats(planner);
+  md.push('#### G6.1 read two ways');
+  md.push('');
+  md.push('| reading | value | n | threshold |');
+  md.push('|---|---:|---:|---|');
+  md.push(`| 2nd-best ORDERED SELECTION within 10% (what gate.ts scores) | ${pct(mg.closeCallStrict)} | ${mg.nStrict} | 20–45% |`);
+  md.push(`| …of those, exact ties | ${pct(mg.tieRate)} | ${mg.nStrict} | — |`);
+  md.push(`| 2nd-best DIFFERENT-SUBSET shipment within 10% | ${pct(mg.closeCallSubset)} | ${mg.nSubset} | — |`);
+  md.push('');
+  md.push('The first runner-up is usually the same shipment with one scoreless part'
+    + ' added or two commuting parts swapped, which ties exactly. The second asks'
+    + ' whether a genuinely different shipment was nearly as good.');
+  md.push('');
+
   md.push('#### Losses by round type — where runs actually die');
   md.push('');
   md.push('| tier | round 1 | round 2 | Audit (round 3) | losses |');
@@ -152,13 +166,23 @@ async function main(): Promise<void> {
     + ' Audits, so a healthy game concentrates roughly a third of its losses here.');
   md.push('');
 
-  // --- per-audit -----------------------------------------------------------
-  md.push('#### Per-Audit kill rates (`planner`)');
+  // --- per-audit, every tier ----------------------------------------------
+  md.push('#### Per-Audit kill rates, by name');
   md.push('');
-  md.push('| shift | Audit | reached | died on it | kill rate | share of all losses |');
-  md.push('|---:|---|---:|---:|---:|---:|');
-  for (const a of auditStats(planner, AUDITS)) {
-    md.push(`| ${a.shift} | ${a.name} (\`${a.def}\`) | ${a.attempts} | ${a.losses} | ${pct(a.killRate)} | ${pct(a.shareOfLosses)} |`);
+  md.push('_"reached" = runs that got past round 2 of that shift. "kill rate" ='
+    + ' of the runs that faced this Audit, the share it ended. This is the table the'
+    + ' rebalance should be steered by: a per-shift histogram cannot show it, because'
+    + ' the concentration is on the ROUND axis, not the shift axis._');
+  for (const b of bots) {
+    const rs = records.filter((r) => r.bot === b);
+    md.push('');
+    md.push(`\`${b}\``);
+    md.push('');
+    md.push('| shift | Audit | reached | died on it | kill rate | share of all losses |');
+    md.push('|---:|---|---:|---:|---:|---:|');
+    for (const a of auditStats(rs, AUDITS)) {
+      md.push(`| ${a.shift} | ${a.name} (\`${a.def}\`) | ${a.attempts} | ${a.losses} | ${pct(a.killRate)} | ${pct(a.shareOfLosses)} |`);
+    }
   }
   md.push('');
 

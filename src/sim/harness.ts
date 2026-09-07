@@ -38,8 +38,9 @@ import type { Bot } from '../bots/types.ts';
 // decision, 2s for a scrap. Two extensions, both stated because they move G7.2:
 //   - each SHOP VISIT costs one 8s beat on top of the purchases made in it (you
 //     read the five items before you buy any of them);
-//   - each REORDER costs one 8s beat (it is a shop-time structural decision, and it
-//     is the decision the whole game is about; charging it 0 would be absurd).
+//   - each ROUND-START REORDER costs one 8s beat (it is a structural decision, and
+//     it is the decision the whole game is about; charging it 0 would be absurd),
+//     and each mid-round line NUDGE costs a 4s beat, the same as a shipment.
 // Nothing else is charged. Reading the hand between shipments, the audit text, the
 // menus — all free. The model is therefore a LOWER BOUND on real session length.
 export const SECONDS_PER_SHIPMENT = 4;
@@ -71,6 +72,8 @@ export interface HarnessRecord extends RunRecord {
    * reported; neither is quietly chosen for the reader.
    */
   optOrderChangedStrict: boolean[];
+  /** G6.1 companion: margin against the best DIFFERENT-SUBSET shipment. */
+  decisionMarginSubsetPct: number[];
   wallMs: number;
 }
 
@@ -106,6 +109,7 @@ export function runOne(bot: Bot, seed: number, opts: RunOptions = {}): HarnessRe
   const arrivalIds: string[] = s.line.map((m) => m.id);
   const evalCounts: number[] = [];
   const margins: number[] = [];
+  const subsetMargins: number[] = [];
   const gains: number[] = [];
   const optChanged: boolean[] = [];
   const optStrict: boolean[] = [];
@@ -116,6 +120,7 @@ export function runOne(bot: Bot, seed: number, opts: RunOptions = {}): HarnessRe
   let scraps = 0;
   let shopVisits = 0;
   let shopActions = 0;
+  let refinements = 0;
 
   while (!s.over) {
     // --- reorder, at the START of the round -------------------------------
@@ -167,12 +172,18 @@ export function runOne(bot: Bot, seed: number, opts: RunOptions = {}): HarnessRe
         if (s.scrapsLeft >= before) break;
         scraps++;
       }
+      const refine = bot.refineLine(s);
+      if (refine !== null) {
+        reorderLine(s, refine);
+        refinements++;
+      }
       const d = bot.chooseShipment(s);
       if (d.indices.length === 0) break;
       playShipment(s, d.indices);
       shipments++;
       evalCounts.push(d.evaluated);
       if (Number.isFinite(d.marginPct)) margins.push(d.marginPct);
+      if (Number.isFinite(d.subsetMarginPct)) subsetMargins.push(d.subsetMarginPct);
       if (opts.onShipment !== undefined) opts.onShipment(s, d.evaluated, d.marginPct);
     }
     if (s.over) break;
@@ -211,7 +222,8 @@ export function runOne(bot: Bot, seed: number, opts: RunOptions = {}): HarnessRe
   const estSeconds =
     SECONDS_PER_SHIPMENT * shipments
     + SECONDS_PER_SCRAP * scraps
-    + SECONDS_PER_SHOP_DECISION * (shopVisits + shopActions);
+    + SECONDS_PER_SHOP_DECISION * (shopVisits + shopActions)
+    + SECONDS_PER_SHIPMENT * refinements;
 
   return {
     bot: bot.name as BotName,
@@ -236,6 +248,7 @@ export function runOne(bot: Bot, seed: number, opts: RunOptions = {}): HarnessRe
     budgetHits: bot.ev !== null ? bot.ev.budgetHits : 0,
     optOrderShiftBoundary: optBoundary,
     optOrderChangedStrict: optStrict,
+    decisionMarginSubsetPct: subsetMargins,
     wallMs: performance.now() - t0,
   };
 }

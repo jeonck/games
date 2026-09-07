@@ -9,7 +9,8 @@
     "sim": "node --experimental-strip-types src/sim/cli.ts",
     "dev": "node tools/devserver.mjs",
     "build": "node tools/build-web.mjs",
-    "build:web": "node tools/build-web.mjs"
+    "build:web": "node tools/build-web.mjs",
+    "test:bench": "TAKT_BENCH=1 node --test --experimental-strip-types \"tests/bots.test.ts\""
   },
   "devDependencies": {}
 }

@@ -20,6 +20,8 @@ export interface ShipmentDecision {
   indices: number[];
   /** G6.1 sample: (best - secondBest) / best * 100. NaN when not searched. */
   marginPct: number;
+  /** the same margin against the best DIFFERENT-SUBSET candidate. See search.ts. */
+  subsetMarginPct: number;
   /** distinct ordered selections the bot scored to reach this. 0 for non-searchers. */
   evaluated: number;
 }
@@ -56,7 +58,17 @@ export interface Bot {
   chooseShop(s: RunState, shop: Shop): ShopAction;
 
   /**
-   * Called once per shop, after buying. `arrival` is the line in ACQUISITION
+   * Called before every shipment, after any scrapping. A cheap in-round
+   * refinement of the line: the hand changes under the bot as parts are played and
+   * redrawn, and `reorderLine` is free and legal at any time, so a player who has
+   * noticed that will nudge the line mid-round. Returns null for tiers that do not.
+   * Emits no G2 telemetry — G2.2/G2.4 are about the OPTIMAL ordering per round,
+   * which is measured once, at the round's start, from the arrival order.
+   */
+  refineLine(s: RunState): number[] | null;
+
+  /**
+   * `arrival` is the line in ACQUISITION
    * order — the order the machines would sit in had the player never reordered —
    * which is the baseline G2.1 is defined against. Return null to leave the line
    * alone (and to emit no G2 sample).
