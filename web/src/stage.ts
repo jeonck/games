@@ -13,11 +13,10 @@
 
 import type { Beat, PartChange, PartSnap, Reel } from './vm.ts';
 import { fmt, fmtMult } from './vm.ts';
-import { ARCHETYPE_COLOR, ARCHETYPE_GLYPH, PALETTE, TIER_COLORS, colorOf, mixColor } from './art.ts';
-import { drawToken, drawValueTag, font, roundRect, textCenter } from './draw.ts';
+import { ARCHETYPE_BADGE, ARCHETYPE_COLOR, PALETTE, TIER_COLORS, colorOf, mixColor } from './art.ts';
+import { drawToken, drawValueTag, fitText, font, poly, roundRect, textCenter } from './draw.ts';
 import { TIER_LADDER } from '../../src/content/parts.ts';
 
-const STEP = 208;            // world distance between stations
 const TRANSIT = 0.42;        // fraction of a beat spent travelling to the machine
 
 function ease(t: number): number { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
@@ -30,6 +29,16 @@ export interface StationView {
   level: number;
   gamble: boolean;
   dim?: boolean;
+  /** what this machine would add to the batch currently selected, if anything */
+  delta?: number;
+}
+
+/** Context the resting view needs to fill the frame with something worth looking at. */
+export interface IdleInfo {
+  /** rungs of the tier ladder the selected batch currently occupies */
+  ladderBatch: number[];
+  bestRung: number;
+  bestName: string;
 }
 
 export type StageMode = 'idle' | 'play' | 'attract';
@@ -46,6 +55,13 @@ export class Stage {
   mode: StageMode = 'idle';
   private stations: StationView[] = [];
   private idleBatch: PartSnap[] = [];
+  private idleInfo: IdleInfo = { ladderBatch: [], bestRung: -1, bestName: '' };
+  // layout, recomputed every frame from the canvas size — the stage goes full-bleed
+  // during a shipment and back to a third of the screen at rest
+  private step = 208;
+  private bw = 104;
+  private bh = 86;
+  private tokSize = 24;
   private reel: Reel | null = null;
   private t = 0;
   private speed = 1;
@@ -91,7 +107,7 @@ export class Stage {
       // be able to run the reel backwards or skip a beat outright
       const dt = Math.max(0, Math.min(64, now - this.last));
       this.last = now;
-      this.step(dt);
+      this.advance(dt);
       this.draw();
       this.raf = requestAnimationFrame(loop);
     };
@@ -105,10 +121,11 @@ export class Stage {
   }
 
   /** The resting view: the line as it stands, with the chosen batch waiting at intake. */
-  showIdle(stations: StationView[], batch: PartSnap[]): void {
+  showIdle(stations: StationView[], batch: PartSnap[], info?: IdleInfo): void {
     this.mode = 'idle';
     this.stations = stations;
     this.idleBatch = batch;
+    if (info !== undefined) this.idleInfo = info;
     this.reel = null;
   }
 
@@ -142,7 +159,7 @@ export class Stage {
 
   // -------------------------------------------------------------------------
 
-  private step(dt: number): void {
+  private advance(dt: number): void {
     this.beltScroll = (this.beltScroll + dt * 0.045) % 28;
     if (this.shake.t > 0) this.shake.t = Math.max(0, this.shake.t - dt);
     if (this.mode === 'attract') { this.attractT += dt; return; }
@@ -180,9 +197,27 @@ export class Stage {
     return bs[bs.length - 1];
   }
 
-  private stationX(i: number): number { return i * STEP; }
+  /**
+   * One place where every size in the conveyor comes from. The stage is roughly a
+   * third of the screen while you are choosing and the ENTIRE screen while a
+   * shipment runs, and the composition has to look deliberate at both — so the
+   * machines, the belt and the parts are all a fraction of the canvas rather than
+   * fixed pixel sizes floating in whatever space is left over.
+   */
+  private measure(): void {
+    // width decides how many stations are on screen at once (two, plus a hint of the
+    // next); height decides how tall the machinery stands.
+    this.bw = Math.max(92, Math.min(140, this.w * 0.3));
+    this.bh = Math.max(64, Math.min(152, this.h * 0.21));
+    this.step = Math.max(186, this.bw * 1.58);
+  }
 
-  private spacing(n: number): number { return n <= 3 ? 64 : n <= 5 ? 54 : n <= 8 ? 42 : 32; }
+  private stationX(i: number): number { return i * this.step; }
+
+  /** Spacing follows the object size, so parts never overlap their own value tags. */
+  private spacing(n: number): number {
+    return this.tokSize * (n <= 3 ? 2.4 : n <= 6 ? 2.0 : 1.72);
+  }
 
   private slotX(station: number, idx: number, n: number): number {
     return this.stationX(station) + (idx - (n - 1) / 2) * this.spacing(n);
@@ -200,9 +235,10 @@ export class Stage {
     // belt and travel with the batch.
     if (this.mode !== 'play' || this.reel === null) { this.drawIdle(); return; }
 
+    this.measure();
     const r = this.reel;
-    const beltY = Math.round(this.h * 0.66);
-    const size = Math.max(15, Math.min(30, this.h * 0.085));
+    const beltY = Math.round(this.h * 0.5);
+    const size = Math.max(15, Math.min(36, this.h * 0.05));
 
     let focusStation = 0;
     let beat: Beat | null = null;
@@ -236,7 +272,90 @@ export class Stage {
 
     ctx.restore();
 
-    if (beat !== null) this.drawPlayHud(r, beat, u, beltY, size);
+    if (beat !== null) {
+      this.drawPlayHud(r, beat, u);
+      // the rail is navigation; during the reveal it is just something else on top
+      // of the object, so it steps out of the way
+      if (beat.kind !== 'crate') this.drawRail(r, beat);
+      this.drawTicker(r, beat, beltY);
+    }
+  }
+
+  /**
+   * Where the batch is in the line, as a row of pips. Two seconds is long enough
+   * that "how much further" is a real question, and it is the cheapest possible
+   * answer to it.
+   */
+  private drawRail(r: Reel, beat: Beat): void {
+    const ctx = this.ctx;
+    const n = r.beats.length;
+    const pad = 18;
+    const gap = 4;
+    const cw = (this.w - pad * 2 - gap * (n - 1)) / n;
+    const y = Math.round(this.h * 0.215);
+    for (let i = 0; i < n; i++) {
+      const x = pad + i * (cw + gap);
+      const bt = r.beats[i];
+      ctx.fillStyle = i === beat.index ? PALETTE.cream
+        : i < beat.index ? (bt.delta > 0 ? PALETTE.accent : PALETTE.line)
+          : PALETTE.panel;
+      roundRect(ctx, x, y, cw, i === beat.index ? 7 : 4, 2);
+      ctx.fill();
+    }
+    textCenter(ctx, beat.kind === 'crate' ? 'THE CRATE' : `STATION ${beat.index + 1} OF ${n}`,
+      this.w * 0.5, y + 22, 10, PALETTE.dim);
+  }
+
+  /**
+   * The breakdown, accumulating live under the belt as each machine fires. By the
+   * time the object lands, the whole explanation of the number is already on screen
+   * — which is the one thing this build exists to make true.
+   */
+  private drawTicker(r: Reel, beat: Beat, beltY: number): void {
+    const ctx = this.ctx;
+    interface Row { tag: string; name: string; delta: number; landed: boolean; cur: boolean; fired: boolean }
+    const rows: Row[] = [{
+      tag: '·', name: 'RAW PARTS', delta: r.beats[0].batchAfter,
+      landed: true, cur: false, fired: true,
+    }];
+    for (const b of r.beats) {
+      if (b.kind !== 'machine' && b.kind !== 'audit') continue;
+      const landed = b.index < beat.index
+        || (b.index === beat.index
+          && this.t - b.startMs > (b.durationMs - b.holdMs) * TRANSIT + b.holdMs);
+      rows.push({
+        tag: b.lineIndex >= 0 ? String(b.lineIndex + 1) : 'A',
+        name: b.name.toUpperCase(), delta: b.delta,
+        landed, cur: b.index === beat.index, fired: b.fired,
+      });
+    }
+    const top = beltY + Math.max(48, Math.min(58, this.h * 0.075));
+    const avail = this.h - top - 24;
+    const rowH = Math.max(15, Math.min(54, avail / rows.length));
+    if (rowH < 14) return;
+    const peak = Math.max(1, ...rows.map((b) => Math.abs(b.delta)));
+    textCenter(ctx, 'WHY THE NUMBER MOVED', this.w * 0.5, top - 10, 10, PALETTE.line);
+    let y = top + (avail - rowH * rows.length) * 0.28 + rowH * 0.5;
+    ctx.textBaseline = 'middle';
+    for (const b of rows) {
+      ctx.globalAlpha = !b.landed ? 0.22 : b.fired ? (b.cur ? 1 : 0.7) : 0.32;
+      ctx.font = font(Math.min(15, rowH * 0.42), b.cur && b.landed ? 900 : 800);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = b.cur && b.landed ? PALETTE.cream : PALETTE.dim;
+      ctx.fillText(`${b.tag}  ${b.name}`, 18, y);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = !b.landed ? PALETTE.line
+        : b.delta > 0 ? PALETTE.gold : b.delta < 0 ? PALETTE.bad : PALETTE.line;
+      ctx.fillText(!b.landed ? '·' : b.fired ? `${b.delta >= 0 ? '+' : ''}${fmt(b.delta)}` : '—', this.w - 18, y);
+      // a share bar under each row: the same explanation the results panel gives,
+      // arriving one machine at a time while the batch is still moving
+      const barW = b.landed ? (Math.abs(b.delta) / peak) * (this.w - 36) : 0;
+      ctx.fillStyle = b.delta < 0 ? PALETTE.bad : PALETTE.accent;
+      ctx.globalAlpha = b.landed ? (b.cur ? 0.9 : 0.45) : 0;
+      if (barW > 0) { roundRect(ctx, 18, y + rowH * 0.26, barW, 3, 1.5); ctx.fill(); }
+      ctx.globalAlpha = 1;
+      y += rowH;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -244,80 +363,188 @@ export class Stage {
   // -------------------------------------------------------------------------
 
   private drawIdle(): void {
-    const ctx = this.ctx;
     const b = this.idleBatch;
-    const rowY = Math.round(this.h * 0.72);
+    // Content-sized bands rather than fixed fractions: on a 640px Android the three
+    // bands pack tight, on an 844px iPhone the slack is shared out between them, and
+    // in neither case is there a hole in the middle of the screen.
+    const n = this.stations.length + 2;
+    const rows = this.schemRows(n);
+    const objSize = b.length > 0 ? Math.min(46, (this.w - 18) / (b.length * 2.35)) : 24;
 
-    textCenter(ctx, 'THE LINE — LEFT TO RIGHT', this.w * 0.5, 16, 11, PALETTE.dim);
+    let batchH = b.length > 0 ? 30 + objSize * 2 + 34 : 78;
+    let schemH = 18 + rows * Math.min(78, Math.max(44, this.h * 0.17));
+    // On a short canvas the ladder is the first thing to go: three bands crammed
+    // into 250px collide, and two bands that breathe beat three that do not.
+    let ladderH = this.h < 300 ? 0 : Math.max(40, Math.min(96, this.h * 0.22));
 
-    if (b.length === 0) {
-      textCenter(ctx, 'TAP PARTS BELOW', this.w * 0.5, this.h * 0.34, 15, PALETTE.dim);
-      textCenter(ctx, 'the order you tap is the order they enter', this.w * 0.5, this.h * 0.34 + 22, 12, PALETTE.line);
-    } else {
-      const size = Math.min(this.h * 0.13, (this.w - 30) / (b.length * 2.5));
-      const gap = size * 2.4;
-      const y = this.h * 0.36;
-      for (let i = 0; i < b.length; i++) {
-        const p = b[i];
-        const x = this.w * 0.5 + (i - (b.length - 1) / 2) * gap;
-        drawToken(ctx, {
-          defFrom: p.def, defTo: p.def, t: 0, color: colorOf(p.def, p.tags),
-          x, y, size, alpha: 1, rot: 0, glow: 0,
-        });
-        drawValueTag(ctx, x, y + size * 1.4, fmt(p.value),
-          Math.abs(p.mult - 1) > 0.001 ? fmtMult(p.mult) : null, Math.max(9, size * 0.42));
-        ctx.fillStyle = PALETTE.accent;
-        ctx.beginPath();
-        ctx.arc(x - size * 0.92, y - size * 0.92, 9, 0, Math.PI * 2);
-        ctx.fill();
-        textCenter(ctx, String(i + 1), x - size * 0.92, y - size * 0.92, 11, '#1a0c02');
-      }
+    const avail = this.h - 12;
+    const bands = ladderH > 0 ? 3 : 2;
+    const total = batchH + schemH + ladderH;
+    if (total > avail) {
+      const f = avail / total;
+      batchH *= f; schemH *= f; ladderH *= f;
     }
+    const slack = Math.max(0, avail - (batchH + schemH + ladderH));
+    const gap = Math.min(34, slack / bands);
+    let y = 6 + Math.max(0, (slack - gap * (bands - 1)) * 0.4);
 
-    this.drawSchematic(rowY);
+    this.drawBatchBand(y, y + batchH);
+    y += batchH + gap;
+    this.drawSchematic(y, y + schemH);
+    if (ladderH > 0) this.drawLadderRail(y + schemH + gap, y + schemH + gap + ladderH);
   }
 
-  /** intake ▸ machine ▸ machine ▸ … ▸ crate, sized to fit whatever the line is */
-  private drawSchematic(y: number): void {
+  private schemRows(n: number): number {
+    const perRowMax = Math.max(2, Math.floor((this.w - 16) / 58));
+    return Math.max(1, Math.ceil(n / perRowMax));
+  }
+
+  private drawBatchBand(top: number, bottom: number): void {
+    const ctx = this.ctx;
+    const b = this.idleBatch;
+    const h = bottom - top;
+    textCenter(ctx, b.length === 0 ? 'THE BATCH' : 'THE BATCH — IN TAP ORDER',
+      this.w * 0.5, top + 6, 11, PALETTE.dim);
+
+    if (b.length === 0) {
+      const cy = (top + bottom) / 2 + 6;
+      textCenter(ctx, 'TAP PARTS BELOW', this.w * 0.5, cy - 8, Math.min(20, this.w * 0.058), PALETTE.dim);
+      textCenter(ctx, 'the order you tap is the order they enter the line',
+        this.w * 0.5, cy + 16, Math.min(12, this.w * 0.032), PALETTE.line);
+      return;
+    }
+    const size = Math.max(11, Math.min((h - 44) * 0.42, (this.w - 18) / (b.length * 2.35)));
+    const gap = size * 2.3;
+    const y = top + 22 + (h - 22) * 0.44;
+    for (let i = 0; i < b.length; i++) {
+      const p = b[i];
+      const x = this.w * 0.5 + (i - (b.length - 1) / 2) * gap;
+      drawToken(ctx, {
+        defFrom: p.def, defTo: p.def, t: 0, color: colorOf(p.def, p.tags),
+        x, y, size, alpha: 1, rot: 0, glow: 0,
+      });
+      drawValueTag(ctx, x, y + size * 1.42, fmt(p.value),
+        Math.abs(p.mult - 1) > 0.001 ? fmtMult(p.mult) : null, Math.max(9, size * 0.44));
+      if (size >= 17 && bottom - (y + size * 1.42) > 30) {
+        textCenter(ctx, p.name.toUpperCase(), x, y + size * 1.42 + 22,
+          Math.max(8, Math.min(10, size * 0.4)), PALETTE.dim);
+      }
+      const br = Math.max(8, size * 0.34);
+      ctx.fillStyle = PALETTE.accent;
+      ctx.beginPath();
+      ctx.arc(x - size * 0.9, y - size * 0.9, br, 0, Math.PI * 2);
+      ctx.fill();
+      textCenter(ctx, String(i + 1), x - size * 0.9, y - size * 0.9, br * 1.25, '#1a0c02');
+    }
+  }
+
+  /**
+   * IN ▸ machine ▸ machine ▸ … ▸ CRATE, wrapping onto more rows when the line gets
+   * long, so an eight-machine line still shows eight readable NAMES rather than
+   * eight identical glyphs.
+   */
+  private drawSchematic(top: number, bottom: number): void {
     const ctx = this.ctx;
     const n = this.stations.length + 2;
     const pad = 8;
-    const cell = (this.w - pad * 2) / n;
-    const bw = Math.min(cell - 6, 74);
-    const bh = Math.min(46, this.h * 0.19);
+    const rows = this.schemRows(n);
+    // balance the rows so a five-station line never leaves the crate stranded alone
+    const perRow = Math.ceil(n / rows);
+    const cell = (this.w - pad * 2) / perRow;
+    const rowH = (bottom - top - 16) / rows;
+    const bw = Math.min(cell - 6, 96);
+    const bh = Math.max(28, Math.min(rowH - 8, 60));
+
+    textCenter(ctx, 'THE LINE', this.w * 0.5, top + 3, 11, PALETTE.dim);
 
     for (let i = 0; i < n; i++) {
-      const cx = pad + cell * (i + 0.5);
-      if (i > 0) {
-        textCenter(ctx, '▸', pad + cell * i, y, Math.min(14, cell * 0.28), PALETTE.line);
-      }
+      const row = Math.floor(i / perRow);
+      const col = i % perRow;
+      const cx = pad + cell * (col + 0.5);
+      const cy = top + 16 + rowH * (row + 0.5);
+      if (col > 0) textCenter(ctx, '▸', pad + cell * col, cy, Math.min(13, cell * 0.24), PALETTE.line);
+
       if (i === 0 || i === n - 1) {
         ctx.fillStyle = PALETTE.panel;
-        roundRect(ctx, cx - bw / 2, y - bh / 2, bw, bh, 7);
+        roundRect(ctx, cx - bw / 2, cy - bh / 2, bw, bh, 7);
         ctx.fill();
         ctx.strokeStyle = PALETTE.line;
         ctx.lineWidth = 2;
         ctx.stroke();
-        textCenter(ctx, i === 0 ? 'IN' : 'CRATE', cx, y, Math.min(12, bw * 0.24), PALETTE.dim);
+        textCenter(ctx, i === 0 ? 'IN' : 'CRATE', cx, cy, Math.min(12, bw * 0.2), PALETTE.dim);
         continue;
       }
       const st = this.stations[i - 1];
       const accent = ARCHETYPE_COLOR[st.archetype] ?? PALETTE.dim;
+      const roomy = bw >= 72;
       ctx.save();
       ctx.globalAlpha = st.dim === true ? 0.4 : 1;
+      roundRect(ctx, cx - bw / 2, cy - bh / 2, bw, bh, 7);
       ctx.fillStyle = PALETTE.panel;
-      roundRect(ctx, cx - bw / 2, y - bh / 2, bw, bh, 7);
       ctx.fill();
       ctx.strokeStyle = st.gamble ? PALETTE.gold : PALETTE.line;
       ctx.lineWidth = 2;
       ctx.stroke();
-      textCenter(ctx, ARCHETYPE_GLYPH[st.archetype] ?? '+', cx, y - bh * 0.12, Math.min(20, bw * 0.34), accent);
-      textCenter(ctx, String(i), cx - bw / 2 + 9, y - bh / 2 + 9, 9, PALETTE.dim);
-      if (st.level > 1) textCenter(ctx, `L${st.level}`, cx + bw / 2 - 10, y - bh / 2 + 9, 9, PALETTE.gold);
+      // clip to the chip: a long machine name must be squeezed, never spilled
+      ctx.clip();
+      // the family tag survives even when the chip is too narrow for a badge
+      ctx.fillStyle = accent;
+      ctx.fillRect(cx - bw / 2, cy - bh / 2, bw, 3);
+      const label = st.name.toUpperCase();
+      const px = fitText(ctx, label, bw - (roomy ? 24 : 8), Math.min(13, bh * 0.3), 6);
+      textCenter(ctx, label, cx, cy - (st.delta !== undefined ? bh * 0.14 : 0), px, PALETTE.cream);
+      // the live per-machine contribution: the ordering skill, visible before you ship
+      if (st.delta !== undefined) {
+        textCenter(ctx, `${st.delta >= 0 ? '+' : ''}${fmt(st.delta)}`, cx, cy + bh * 0.28,
+          Math.min(12, bh * 0.26), st.delta > 0 ? PALETTE.gold : st.delta < 0 ? PALETTE.bad : PALETTE.line);
+      }
+      if (roomy) {
+        this.badge(st.archetype, cx - bw / 2 + 9, cy - bh / 2 + 9, 5, accent);
+        textCenter(ctx, String(i), cx + bw / 2 - 9, cy - bh / 2 + 9, 9, PALETTE.dim);
+        if (st.level > 1) textCenter(ctx, `L${st.level}`, cx + bw / 2 - 9, cy + bh / 2 - 9, 9, PALETTE.gold);
+      }
       ctx.restore();
-      const name = st.name.length > 9 ? st.name.slice(0, 8) + '…' : st.name;
-      textCenter(ctx, name.toUpperCase(), cx, y + bh / 2 + 10, Math.min(10, bw * 0.19),
-        st.dim === true ? PALETTE.line : PALETTE.dim);
+    }
+  }
+
+  /**
+   * The ladder, always on screen. It is the fantasy the whole game is selling, so it
+   * is worth a permanent strip: the rungs this batch is standing on light up, and the
+   * best thing the player has ever made is named underneath.
+   */
+  private drawLadderRail(top: number, bottom: number): void {
+    const ctx = this.ctx;
+    const n = TIER_LADDER.length;
+    const h = bottom - top;
+    if (h < 34) return;
+    const pad = 10;
+    const cell = (this.w - pad * 2) / n;
+    const size = Math.max(8, Math.min(cell * 0.34, h * 0.30));
+    const cy = top + 14 + size;
+    const lit = new Set(this.idleInfo.ladderBatch);
+
+    textCenter(ctx, 'THE LADDER', this.w * 0.5, top + 5, 10, PALETTE.dim);
+    ctx.strokeStyle = PALETTE.line;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(pad + cell * 0.5, cy);
+    ctx.lineTo(pad + cell * (n - 0.5), cy);
+    ctx.stroke();
+
+    for (let i = 0; i < n; i++) {
+      const t = TIER_LADDER[i];
+      const x = pad + cell * (i + 0.5);
+      const on = lit.has(i);
+      // drawToken sets its own globalAlpha, so dimming has to go through the token
+      const a = on ? 1 : i <= this.idleInfo.bestRung ? 0.4 : 0.16;
+      drawToken(ctx, {
+        defFrom: t.def, defTo: t.def, t: 0, color: TIER_COLORS[i],
+        x, y: cy, size: on ? size : size * 0.76, alpha: a, rot: 0, glow: on ? 0.3 : 0,
+      });
+    }
+    if (h >= 52) {
+      const best = this.idleInfo.bestRung >= 0 ? this.idleInfo.bestName.toUpperCase() : 'NOTHING YET';
+      textCenter(ctx, `BEST EVER · ${best}`, this.w * 0.5, cy + size + 14, 10, PALETTE.dim);
     }
   }
 
@@ -348,15 +575,17 @@ export class Stage {
   private drawIntake(beltY: number, size: number): void {
     const ctx = this.ctx;
     const x = this.stationX(0);
+    const w = this.bw * 0.8;
+    const h = this.bh * 0.7;
     ctx.fillStyle = PALETTE.panel;
-    roundRect(ctx, x - 46, beltY - 74, 92, 74, 8);
+    roundRect(ctx, x - w / 2, beltY - 6 - h, w, h, 8);
     ctx.fill();
     ctx.strokeStyle = PALETTE.line;
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.fillStyle = PALETTE.bg;
-    ctx.fillRect(x - 34, beltY - 62, 68, 50);
-    textCenter(ctx, 'INTAKE', x, beltY + 30, 11, PALETTE.dim);
+    ctx.fillRect(x - w / 2 + 12, beltY - 6 - h + 12, w - 24, h - 24);
+    textCenter(ctx, 'INTAKE', x, beltY + 22, 10, PALETTE.dim);
   }
 
   private drawMachine(station: number, st: StationView, beltY: number, beat: Beat | null, u: number): void {
@@ -377,42 +606,67 @@ export class Stage {
     }
     if (holding) pop = 0.18 + 0.18 * Math.sin(sinceFire / 55);
 
-    // the block has to shrink on a short viewport or its label collides with the HUD
-    const bw = Math.min(104, this.h * 0.36) + pop * 14;
-    const bh = Math.min(86, this.h * 0.3) + pop * 12;
+    const bw = this.bw + pop * 14;
+    const bh = this.bh + pop * 12;
     const accent = ARCHETYPE_COLOR[st.archetype] ?? PALETTE.dim;
     const on = active && fired;
+    // the housing stops just above the belt so the belt itself stays legible and the
+    // batch visibly passes THROUGH the machine rather than behind a solid slab
+    const top = beltY - 6 - bh;
 
     ctx.save();
     ctx.globalAlpha = st.dim === true ? 0.45 : 1;
-    ctx.fillStyle = on ? mixColor(PALETTE.panelHi, accent, 0.5) : PALETTE.panel;
-    roundRect(ctx, x - bw / 2, beltY - bh + 12, bw, bh, 10);
+    ctx.fillStyle = on ? mixColor(PALETTE.panelHi, accent, 0.42) : PALETTE.panel;
+    roundRect(ctx, x - bw / 2, top, bw, bh, 10);
     ctx.fill();
     ctx.strokeStyle = on ? PALETTE.cream : PALETTE.line;
     ctx.lineWidth = on ? 3 : 2;
     ctx.stroke();
 
     // legs, so it reads as machinery standing over the belt
-    ctx.fillStyle = PALETTE.panel;
-    ctx.fillRect(x - bw / 2 + 8, beltY + 10, 10, 16);
-    ctx.fillRect(x + bw / 2 - 18, beltY + 10, 10, 16);
+    ctx.fillStyle = PALETTE.line;
+    ctx.fillRect(x - bw / 2 + 10, beltY - 8, 9, 12);
+    ctx.fillRect(x + bw / 2 - 19, beltY - 8, 9, 12);
 
-    const glyph = ARCHETYPE_GLYPH[st.archetype] ?? '+';
-    textCenter(ctx, holding ? '?' : glyph, x, beltY - bh + 44, holding ? 40 : 34, on ? PALETTE.cream : accent);
-    ctx.globalAlpha = st.dim === true ? 0.45 : 1;
-    textCenter(ctx, st.name.toUpperCase(), x, beltY - bh - 4, 12, on ? PALETTE.cream : PALETTE.dim);
-    if (st.level > 1) {
-      textCenter(ctx, `LV${st.level}`, x + bw / 2 - 16, beltY - bh + 22, 10, PALETTE.gold);
+    // NAME FIRST. An archetype glyph cannot tell Press from Doubler — they are the
+    // same archetype — so the badge is a family tag in the corner and the machine's
+    // name is the thing the eye lands on.
+    roundRect(ctx, x - bw / 2, top, bw, bh, 10);
+    ctx.clip();
+    const label = st.name.toUpperCase();
+    const px = fitText(ctx, label, bw - 18, Math.min(19, bh * 0.2), 8);
+    textCenter(ctx, label, x, top + px * 0.95, px, PALETTE.cream);
+    // family tag / level / gamble sit on their own line under the name, in the upper
+    // third of the housing — the lower two thirds are where the parts travel through
+    const tagY = top + px * 2.05;
+    const tags: string[] = [];
+    if (st.level > 1) tags.push(`LV${st.level}`);
+    if (st.gamble) tags.push('◆ GAMBLE');
+    this.badge(st.archetype, x - (tags.length > 0 ? 34 : 0), tagY, 6, accent);
+    if (tags.length > 0) {
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.font = font(10, 800);
+      ctx.fillStyle = st.gamble ? PALETTE.gold : PALETTE.dim;
+      ctx.fillText(tags.join(' '), x - 22, tagY);
     }
-    if (st.gamble) {
-      textCenter(ctx, '◆', x - bw / 2 + 14, beltY - bh + 22, 12, PALETTE.gold);
-    }
+    if (holding) textCenter(ctx, '?', x, top + bh * 0.55, bh * 0.4, PALETTE.gold);
     ctx.restore();
 
     if (active && fired && beat !== null && beat.fired && !holding) {
-      this.drawRuleCard(x, beltY + 34, beat, clamp01((sinceFire - hold) / 200));
-      if (beat.delta !== 0) this.drawDeltaChip(x, beltY - bh - 26, beat.delta, clamp01((sinceFire - hold) / 420));
+      this.drawRuleCard(x, beltY + 26, beat, clamp01((sinceFire - hold) / 200));
+      if (beat.delta !== 0) this.drawDeltaChip(x, top - 16, beat.delta, clamp01((sinceFire - hold) / 420));
     }
+  }
+
+  /** The archetype family tag: a shape, not a character, so it survives being small. */
+  private badge(archetype: string, x: number, y: number, r: number, color: string): void {
+    const ctx = this.ctx;
+    const shape = ARCHETYPE_BADGE[archetype];
+    if (shape === undefined) return;
+    ctx.fillStyle = color;
+    poly(ctx, shape, r, x, y);
+    ctx.fill();
   }
 
   private drawRuleCard(x: number, y: number, beat: Beat, k: number): void {
@@ -449,9 +703,11 @@ export class Stage {
     const x = this.stationX(station);
     const active = beat !== null && beat.kind === 'crate';
     const k = active ? clamp01(u / (beat as Beat).durationMs) : 0;
+    const w = this.bw;
+    const h = this.bh * 0.72;
     ctx.save();
     ctx.fillStyle = active ? PALETTE.panelHi : PALETTE.panel;
-    roundRect(ctx, x - 62, beltY - 62, 124, 74, 8);
+    roundRect(ctx, x - w / 2, beltY - 6 - h, w, h, 8);
     ctx.fill();
     ctx.strokeStyle = active && k > 0.4 ? PALETTE.gold : PALETTE.line;
     ctx.lineWidth = active && k > 0.4 ? 3 : 2;
@@ -459,10 +715,10 @@ export class Stage {
     ctx.strokeStyle = PALETTE.line;
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(x - 62, beltY - 34); ctx.lineTo(x + 62, beltY - 34);
-    ctx.moveTo(x, beltY - 62); ctx.lineTo(x, beltY - 34);
+    ctx.moveTo(x - w / 2, beltY - 6 - h * 0.45); ctx.lineTo(x + w / 2, beltY - 6 - h * 0.45);
+    ctx.moveTo(x, beltY - 6 - h); ctx.lineTo(x, beltY - 6 - h * 0.45);
     ctx.stroke();
-    textCenter(ctx, 'CRATE', x, beltY + 30, 11, PALETTE.dim);
+    textCenter(ctx, 'CRATE', x, beltY + 22, 10, PALETTE.dim);
     ctx.restore();
   }
 
@@ -478,7 +734,10 @@ export class Stage {
    */
   private drawBatch(r: Reel, beat: Beat, u: number, beltY: number, size: number): void {
     const ctx = this.ctx;
-    const y = beltY - size * 1.5 - 6;
+    const widest = Math.max(2, beat.before.length, beat.after.length);
+    this.tokSize = Math.max(12, Math.min(size, (this.w - 26) / (widest * 2.05)));
+    size = this.tokSize;
+    const y = beltY - size * 1.55 - 15;
     const station = beat.index;
     const dur = beat.durationMs;
     const hold = beat.holdMs;
@@ -595,7 +854,8 @@ export class Stage {
     const dur = beat.durationMs;
     const k = clamp01(u / dur);
     const station = beat.index;
-    const y = beltY - size * 1.5 - 6;
+    const y = beltY - this.tokSize * 1.55 - 15;
+    size = this.tokSize;
     const n = beat.before.length;
     const pour = ease(clamp01(k / 0.4));
     for (let i = 0; i < n; i++) {
@@ -609,17 +869,22 @@ export class Stage {
     const p = r.punchline;
     if (p === null) return;
     const b = ease(clamp01((k - 0.34) / 0.42));
-    // The object plus its name and rung line has to fit the viewport whole — a
-    // Monument cropped by the top edge is the one frame this build cannot afford.
-    const room = Math.min(this.w * 0.32, (this.h - 34) / 2.75);
-    const big = Math.max(34, room * (0.68 + 0.32 * r.awe));
+    // The object gets the band between the running total and the breakdown, whole:
+    // a Monument cropped by an edge, or sitting under the score, is the one frame
+    // this build cannot afford.
+    const hudBottom = Math.min(this.h * 0.135, this.w * 0.23) * 1.6;
+    const bandTop = hudBottom;
+    const bandBot = beltY + Math.max(48, Math.min(58, this.h * 0.075)) - 12;
+    const bandH = Math.max(90, bandBot - bandTop);
+    const room = Math.min(this.w * 0.3, (bandH - 30) / 3.0);
+    const big = Math.max(30, room * (0.7 + 0.3 * r.awe));
     const cx = this.stationX(station);
-    const cy = big + 14;
+    const cy = bandTop + big + Math.max(4, (bandH - (2.62 * big + 26)) * 0.35);
 
     // black out the whole conveyor behind the reveal — the last thing the player
     // looks at in a shipment should be the object, with nothing else competing
     ctx.save();
-    ctx.globalAlpha = b * 0.92;
+    ctx.globalAlpha = b * 0.97;
     ctx.fillStyle = PALETTE.bg;
     ctx.fillRect(cx - this.w * 1.5, -this.h, this.w * 3, this.h * 3);
     ctx.restore();
@@ -640,16 +905,18 @@ export class Stage {
       ctx.restore();
     }
 
-    const overshoot = 1 + Math.sin(clamp01((k - 0.34) / 0.42) * Math.PI) * 0.18;
+    const overshoot = 1 + Math.sin(clamp01((k - 0.34) / 0.42) * Math.PI) * 0.12;
     drawToken(ctx, {
       defFrom: p.def, defTo: p.def, t: 0, color: colorOf(p.def, p.tags),
       x: cx, y: cy, size: big * b * overshoot, alpha: 1, rot: 0, glow: (1 - b) * 0.8,
     });
     ctx.save();
     ctx.globalAlpha = b;
-    textCenter(ctx, p.name.toUpperCase(), cx, cy + big * 1.32, Math.max(20, big * 0.3), PALETTE.cream);
-    const tierLabel = p.tier >= 0 ? `RUNG ${p.tier + 1}/${TIER_LADDER.length}` : p.tags.join(' · ').toUpperCase();
-    textCenter(ctx, tierLabel, cx, cy + big * 1.62, Math.max(10, big * 0.13), p.tier >= 0 ? TIER_COLORS[p.tier] : PALETTE.dim);
+    const nameY = cy + big * overshoot + Math.max(18, big * 0.32);
+    textCenter(ctx, p.name.toUpperCase(), cx, nameY, Math.max(20, big * 0.3), PALETTE.cream);
+    const tierLabel = p.tier >= 0 ? `RUNG ${p.tier + 1} OF ${TIER_LADDER.length}` : p.tags.join(' · ').toUpperCase();
+    textCenter(ctx, tierLabel, cx, nameY + Math.max(14, big * 0.26), Math.max(10, big * 0.13),
+      p.tier >= 0 ? TIER_COLORS[p.tier] : PALETTE.dim);
     ctx.restore();
   }
 
@@ -667,21 +934,22 @@ export class Stage {
     return Math.round(beat.batchBefore + (beat.batchAfter - beat.batchBefore) * v);
   }
 
-  private drawPlayHud(r: Reel, beat: Beat, u: number, beltY: number, size: number): void {
+  private drawPlayHud(r: Reel, beat: Beat, u: number): void {
     const ctx = this.ctx;
     const shown = this.shownTotal(r, beat, u);
     if (this.onTick !== null) this.onTick(shown);
     const cx = this.w * 0.5;
-    textCenter(ctx, 'SHIPMENT', cx, 20, 11, PALETTE.dim);
-    const grow = beat.kind === 'crate' ? 1.08 : 1;
-    textCenter(ctx, fmt(shown), cx, 48, Math.min(46, this.w * 0.13) * grow, PALETTE.cream);
+    const big = Math.min(this.h * 0.135, this.w * 0.23);
+    textCenter(ctx, 'SHIPMENT', cx, big * 0.36, Math.max(10, big * 0.17), PALETTE.dim);
+    const grow = beat.kind === 'crate' ? 1.06 : 1;
+    textCenter(ctx, fmt(shown), cx, big * 1.05, big * grow, PALETTE.cream);
     if (beat.kind === 'machine' && beat.holdMs > 0) {
       const transitDur = (beat.durationMs - beat.holdMs) * TRANSIT;
       const s = u - transitDur;
       if (s >= 0 && s < beat.holdMs) {
         ctx.save();
         ctx.globalAlpha = 0.55 + 0.45 * Math.sin(s / 50);
-        textCenter(ctx, 'GAMBLE', cx, 74, 14, PALETTE.gold);
+        textCenter(ctx, 'GAMBLE', cx, big * 1.7, Math.max(11, big * 0.24), PALETTE.gold);
         ctx.restore();
       }
     }

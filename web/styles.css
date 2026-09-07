@@ -80,7 +80,14 @@ body {
 }
 
 /* ---------- stage ---------- */
-#stage-wrap { position: relative; flex: 1 1 auto; min-height: 168px; }
+#stage-wrap { position: relative; flex: 1 1 auto; min-height: 30vh; }
+/* while a shipment runs the reel takes the whole screen — there is nothing else
+   worth looking at, and a strip of conveyor floating over a dead hand is not a
+   screenshot anyone would post */
+#s-play.shipping #sel-strip,
+#s-play.shipping #hand,
+#s-play.shipping #actions { display: none; }
+#s-play.shipping #stage-wrap { min-height: 0; }
 #stage { position: absolute; inset: 0; width: 100%; height: 100%; display: block; border-radius: 10px; }
 .stage-hint {
   position: absolute; left: 0; right: 0; bottom: 6px; text-align: center;
@@ -124,7 +131,7 @@ body {
 }
 #hand {
   flex: 0 0 auto; display: grid; grid-template-columns: repeat(4, 1fr);
-  gap: 6px; max-height: 40vh; overflow-y: auto;
+  gap: 6px; max-height: 36vh; overflow-y: auto;
 }
 .card {
   position: relative; background: var(--panel); border: 2px solid var(--line);
@@ -172,11 +179,18 @@ body {
 
 /* ---------- overlay ---------- */
 #overlay {
-  position: fixed; inset: 0; background: rgba(10,9,8,.94); z-index: 20;
+  position: fixed; inset: 0; background: #0d0b0a; z-index: 20;
   display: flex; align-items: center; justify-content: center;
   padding: calc(var(--safe-t) + 14px) 14px calc(var(--safe-b) + 14px);
 }
-#overlay-inner { width: 100%; max-width: 460px; max-height: 100%; overflow-y: auto; }
+#overlay-inner {
+  width: 100%; max-width: 460px; height: 100%; overflow-y: auto;
+  display: flex; flex-direction: column; justify-content: center;
+}
+/* the object gets whatever height is left over, so the panel fills the frame
+   instead of floating in the middle of it */
+#overlay-inner > * { flex: 0 0 auto; }
+.ov-object { display: block; width: 100%; flex: 1 1 auto !important; min-height: 96px; max-height: 46vh; margin: 0 0 6px; }
 .ov-title { font-size: 13px; letter-spacing: .16em; color: var(--dim); }
 .ov-big { font-size: clamp(38px, 13vw, 62px); font-weight: 900; line-height: 1; margin: 4px 0 2px; }
 .ov-sub { color: var(--dim); font-size: 13px; margin-bottom: 12px; }

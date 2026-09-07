@@ -456,7 +456,23 @@ export function silhouette(def: string): Silhouette {
 /** Every def this file draws by hand — the content test checks parts.ts against it. */
 export const DRAWN_DEFS: string[] = Object.keys(RAW);
 
-/** Archetype glyphs for the machine blocks. Heavy type instead of more shapes. */
+/**
+ * Archetype BADGES. A glyph can only ever say what family a machine belongs to —
+ * Press and Doubler are both arithmetic, so an icon can never tell them apart. So the
+ * badge is deliberately demoted to a family tag (shape + colour) and the machine's
+ * NAME does the identifying work everywhere it is drawn.
+ */
+export const ARCHETYPE_BADGE: Record<string, Poly> = {
+  arithmetic: [-0.78, -0.78, 0.78, -0.78, 0.78, 0.78, -0.78, 0.78],
+  positional: [0, -1, 1, 0, 0, 1, -1, 0],
+  filter: [-0.98, -0.76, 0.98, -0.76, 0, 0.92],
+  generative: circlePoly(0, 0, 0.92, 18),
+  conditional: [0, -0.98, 0.85, -0.49, 0.85, 0.49, 0, 0.98, -0.85, 0.49, -0.85, -0.49],
+  economic: [0, -0.98, 0.93, -0.3, 0.58, 0.8, -0.58, 0.8, -0.93, -0.3],
+  transmutation: [0, -0.95, 0.95, 0.78, -0.95, 0.78],
+};
+
+/** Text glyphs for the DOM chrome, where a one-character tag is all that fits. */
 export const ARCHETYPE_GLYPH: Record<string, string> = {
   arithmetic: '+',
   positional: '⇄',

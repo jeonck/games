@@ -83,7 +83,7 @@ function paintPart(canvas: HTMLCanvasElement, p: { def: string; tags: readonly s
   });
 }
 
-function stations(): StationView[] {
+function stations(deltas?: readonly number[]): StationView[] {
   const s = run as RunState;
   const audit = s.round === ROUNDS_PER_SHIFT ? getRegistry().audits[s.shift - 1] : undefined;
   const out: StationView[] = lineView(s.line).map((m) => {
@@ -93,6 +93,7 @@ function stations(): StationView[] {
       // an Audit can switch a whole archetype off for the round; show it greyed out
       // on the belt rather than silently doing nothing
       dim: audit !== undefined && def !== undefined && !audit.allow(def),
+      delta: deltas !== undefined ? deltas[m.index] : undefined,
     };
   });
   if (audit !== undefined) {
@@ -153,7 +154,7 @@ function renderSel(): void {
   const strip = $('sel-strip');
   const s = run as RunState;
   if (sel.length === 0) {
-    strip.innerHTML = '<span>TAP PARTS IN THE ORDER THEY ENTER THE LINE (UP TO 5)</span>';
+    strip.innerHTML = '<span>TAP ORDER = BATCH ORDER · UP TO 5</span>';
   } else {
     strip.innerHTML = sel
       .map((i, k) => `<span class="selpill">${k + 1}. ${snap(s.hand[i]).name}</span>`)
@@ -167,7 +168,13 @@ function renderSel(): void {
     : 'SHIP<b>pick parts</b>';
   ($('btn-scrap') as HTMLButtonElement).disabled = sel.length === 0 || s.scrapsLeft <= 0;
   ($('btn-order') as HTMLButtonElement).disabled = s.line.length < 2;
-  stage.showIdle(stations(), selSnaps());
+
+  const batch = selSnaps();
+  stage.showIdle(stations(pv.ok ? pv.perMachine : undefined), batch, {
+    ladderBatch: batch.map((p) => p.tier).filter((t) => t >= 0),
+    bestRung: meta.bestRung,
+    bestName: meta.bestObject !== '' ? nameOf(meta.bestObject) : '',
+  });
 }
 
 function renderPlay(): void {
@@ -220,9 +227,15 @@ function onShip(): void {
   const hint = $('stage-hint');
   hint.hidden = false;
   hint.textContent = 'TAP TO SPEED UP · HOLD TO SKIP';
+  // The reel is the product. While it runs it gets the whole screen, not a strip
+  // above a hand of cards the player cannot act on anyway.
+  $('s-play').classList.add('shipping');
+  stage.resize();
 
   stage.onDone = () => {
     hint.hidden = true;
+    $('s-play').classList.remove('shipping');
+    stage.resize();
     // Let the object sit in the crate for a beat before the numbers arrive. The
     // reveal is the payoff; covering it instantly with a results panel throws it away.
     window.setTimeout(() => { busy = false; afterShipment(reel); }, meta.fast ? 120 : 340);
@@ -243,6 +256,7 @@ function showResults(reel: Reel): void {
   const p = reel.punchline;
   const next = dead ? 'SEE THE DAMAGE' : cleared ? 'TO THE SHOP' : 'KEEP GOING';
   overlay(`
+    ${p !== null ? '<canvas class="ov-object" id="ov-obj"></canvas>' : ''}
     <div class="ov-title">${p !== null ? 'INTO THE CRATE' : 'NOTHING SHIPPED'}</div>
     <div class="ov-big">${reel.headline}</div>
     <div class="ov-sub">${p !== null && p.tier >= 0 ? `rung ${p.tier + 1} of ${TIER_LADDER.length} · ` : ''}worth ${fmt(reel.gained)}</div>
@@ -251,6 +265,8 @@ function showResults(reel: Reel): void {
     <div class="ov-sub">${fmt(reel.scoreBefore)} → <b style="color:var(--cream)">${fmt(reel.scoreAfter)}</b> of ${fmt(reel.quota)}</div>
     <div class="ov-actions"><button class="btn btn-big" id="ov-next">${next}</button></div>
   `, (root) => {
+    const c = root.querySelector('#ov-obj') as HTMLCanvasElement | null;
+    if (c !== null && p !== null) paintPart(c, p, 0.9);
     (root.querySelector('#ov-next') as HTMLElement).addEventListener('click', () => {
       closeOverlay();
       if (dead) showDefeat();

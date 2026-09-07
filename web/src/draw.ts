@@ -104,6 +104,23 @@ export function drawToken(ctx: CanvasRenderingContext2D, tk: TokenPaint): void {
   ctx.restore();
 }
 
+/**
+ * Largest font size at which `s` fits in `maxPx` of width, down to a floor. Machine
+ * names run from "Press" to "Assembly Line" and every one of them has to stay
+ * readable inside the same block.
+ */
+export function fitText(
+  ctx: CanvasRenderingContext2D, s: string, maxWidth: number, max: number, min: number,
+): number {
+  let px = max;
+  while (px > min) {
+    ctx.font = font(px, 900);
+    if (ctx.measureText(s).width <= maxWidth) break;
+    px -= 1;
+  }
+  return Math.max(min, px);
+}
+
 export function roundRect(
   ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number,
 ): void {
