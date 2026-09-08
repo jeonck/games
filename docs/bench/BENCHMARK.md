@@ -155,13 +155,31 @@ unreachable with this design and says why.
   it makes reordering homework three times per shift rather than a structural
   decision. The metric was measuring depth by pricing it in ownership, and
   ownership is the reason the factory metaphor was chosen in the first place.
-- **Honest note:** this amendment *relaxes* a threshold, which is exactly the
-  move this file exists to prevent. It is logged here in full for that reason.
-  The defence is that the change was proposed by a reviewer who had not seen any
-  measurement, before the metric was ever run, and that it is paired with a new
-  metric (G2.4) that preserves the underlying claim rather than dropping it. If
-  a later reader judges this to be goalpost-moving, the record is here to be
-  judged on.
+- **Honest note, as originally written:** "this amendment *relaxes* a threshold,
+  which is exactly the move this file exists to prevent... If a later reader judges
+  this to be goalpost-moving, the record is here to be judged on."
+
+- **CORRECTION — 2026-09-07, after the Chart Critic's audit. The note above is
+  false, and it was false in the author's own favour's opposite direction.** The
+  amendment does not relax anything for this build. Measured: the shipped content
+  scores **65.96% against the old threshold (≥ 50%) — a PASS**, and **64.04%
+  against the amended threshold (≤ 30%) — a FAIL**. A1 made the gate *harder* to
+  pass, not easier. The author confessed twice, in this file and in the reviewer
+  brief, to a goalpost-move that the numbers say did not happen. Self-criticism is
+  not a substitute for checking, and this entry is left standing as the evidence
+  of that.
+
+- **SECOND DEFECT, same audit: A1 never reached the code.** `src/sim/gate.ts` was
+  amended in this document and nowhere else, so it kept scoring the retired
+  `≥ 50%` threshold. **Iterations 1, 2 and 3 all printed `G2.2 ... PASS` against a
+  threshold this file had already retired.** The true failing count for iteration 3
+  is **10, not 9** — G2.2 fails under its own amended definition. The supplement
+  block in `docs/bench/RESULTS.md`, written by the simulation agent, carried the
+  correct amended figures the whole time; nobody reconciled them with the gate's
+  own scoring. The A2 amendment below was wired into the CLI specifically to avoid
+  repeating this, but G2.2 itself remains unwired: it needs the telemetry to
+  distinguish within-shift from across-boundary transitions, which the frozen
+  `RunRecord` cannot currently express.
 
 ### A2 — 2026-09-07 — G3.1 and G3.4 exclude the fixed starter line
 
@@ -187,8 +205,10 @@ unreachable with this design and says why.
   what the original rationale describes. The ambiguity was in the spec — "share of
   wins" was written intending a usage distribution and implemented as presence,
   and both readings are defensible from the original wording.
-- **Honest note:** this is the second amendment in this project, and the second to
-  make a threshold easier to reach. Two relaxations by the same author who set the
+- **Honest note (corrected 2026-09-07):** this is the second amendment in this
+  project. It was written claiming to be "the second to make a threshold easier to
+  reach"; the audit above shows A1 in fact made its threshold *harder*, so A2 is
+  the first and so far only relaxation. Two relaxations by the same author who set the
   thresholds is a pattern worth distrusting on its face, and the reviewer brief for
   this project asks the critic to judge exactly that. Two facts are offered in
   defence, both checkable: the defect reproduces identically across two different

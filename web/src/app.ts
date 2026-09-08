@@ -220,7 +220,10 @@ function onShip(): void {
 
   sel = [];
   renderHand();
-  renderHud();
+  // NOT renderHud() — the engine has already applied the shipment, so painting the
+  // HUD here lands the final score on frame 0 of a 1.6s reel. The player would read
+  // the answer, then watch a replay of how it was reached. `afterShipment` calls
+  // `renderPlay()` when the reel finishes, which is where the number belongs.
   ($('btn-ship') as HTMLButtonElement).disabled = true;
   ($('btn-scrap') as HTMLButtonElement).disabled = true;
   ($('btn-order') as HTMLButtonElement).disabled = true;
