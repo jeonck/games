@@ -44,7 +44,13 @@ import { getRegistry } from '../content/registry.ts';
  *    is still steep enough that flat-additive builds fall off around shift 4-5 while
  *    multiplicative builds keep pace, which is the pressure that turns "add value"
  *    into "build an engine" and is what makes G1.5 reachable.
- *  - ROUND_MULT = [1, 1.35, 1.55]. Round 3 was 2.4x round 1 and is now 1.55x. The
+ *  - ROUND_MULT = [1, 1.35, 1.55], unchanged. Raising rounds 1 and 2 was tried as a
+ *    way of taking the win rate back without touching the final quota (which is the
+ *    denominator of G5.1) and it is exactly the move this comment should be suspected
+ *    of: it flatters one metric by construction. It also does not work — measured, it
+ *    cost 1.7pp of win rate and 2 points of G5.1, because the planner was never
+ *    losing rounds 1 and 2. It is not in the build.
+ *    Round 3 was 2.4x round 1 and is now 1.55x. The
  *    Audit round is still the hardest round of the shift — it should be — but the
  *    gap it opens is now small enough that the Audit's RULE is what makes it a boss,
  *    not the number. Measured, this moves rounds 1 and 2 from "cleared with two
@@ -55,24 +61,130 @@ import { getRegistry } from '../content/registry.ts';
  *    puts it back ahead). The dip inside the boundary is the breather after a boss.
  *    `quotaFor` is monotonic in each argument with the other held fixed, which is
  *    what api.ts asks for.
- *  - BASE = 210 against a ~20-part starter crate: a raw 5-part shipment is worth
- *    ~30, four of them ~120, so shift 1 round 1 is still unclearable without the
- *    line doing real work. The game states its thesis on turn one. BASE was 300 and
- *    came down because the game measured far too hard everywhere, not only at the
- *    Audits — planner 14%, oracle 16.5% against gate bands of 40-60% and 65-88%.
- *  - Final quota is quotaFor(8, 3) = 11305 before the audit's own quotaMult, 53.8x
- *    the opening quota. G5.1 wants a p95 of 20x that, which multiplicative content
- *    can reach and additive content cannot — again by design.
+ *  - BASE = 300 against a ~20-part starter crate. This is the ONE dial that moved
+ *    for the opening-line and retrigger changes, and it moved because those changes
+ *    made the game measurably easier, not because a threshold needed help.
+ *
+ *    Measured, planner tier, same seed set, n=400 each unless stated:
+ *
+ *      shipped build (3-machine opening, no retrigger)   58.80%   (n=2000)
+ *      + the 4-machine opening line                      71.50%
+ *      + the retrigger family                            73.25%
+ *      + BASE 210 -> 300                                 58.33%   (n=1500)
+ *
+ *    So the opening line is worth +12.7pp of win rate and the whole retrigger
+ *    family is worth +2.0pp — the ceiling change is very nearly win-rate-neutral,
+ *    which is what "reachable by a build, not by default" has to look like in a
+ *    number. BASE carries the correction because it is the only dial that raises
+ *    the curve WITHOUT changing its shape: GROWTH and ROUND_MULT were both tried
+ *    (GROWTH 1.72/1.78, ROUND_MULT [1.25,1.45,1.55]) and both bought the same win
+ *    rate by building a wall at shift 8, which pushed G4.2 (largest share of losses
+ *    in one shift) from 33% to 48% and made a run's outcome a question of whether
+ *    its build scaled rather than of how it was played. BASE 210 was itself the
+ *    correction to an earlier BASE 300 that measured far too hard; what makes 300
+ *    right again is that the player now opens with four machines instead of three
+ *    and a fifth slot for free.
+ *  - Final quota is quotaFor(8, 3) = 16150 before the audit's own quotaMult, 53.8x
+ *    the opening quota. G5.1 wants a p95 of 20x that; before the retrigger family
+ *    existed a shipment was one pass through <=8 machines and the achievable
+ *    multiple was bounded near 256x, so G5.1 was unreachable by any tuning of this
+ *    curve. See THE REPEAT PROTOCOL below.
  *  - Rounded to the nearest 5 purely so the number on screen reads as a target and
  *    not as a hash.
  */
-export const QUOTA_BASE = 210;
+export const QUOTA_BASE = 300;
 export const QUOTA_GROWTH = 1.66;
 export const QUOTA_ROUND_MULT: readonly number[] = [1, 1.35, 1.55];
 
 export const STARTING_CREDITS = 4;
 export const STARTER_CRATE_SIZE = 20;
 export const STARTER_LINE_SIZE = 2;
+
+/**
+ * The line cap a run OPENS with. `BASE_LINE_CAP` (4, frozen in types.ts) is still
+ * the game's base capacity and `MAX_LINE_CAP` (8) is still the ceiling; this is
+ * one free slot on top of the opening line so that the four machines a run now
+ * starts with do not fill the line on turn one.
+ *
+ * It exists because of the opening line, not for its own sake. The starter line is
+ * four machines in a deliberately wrong order (see STARTER_LINE in content/index.ts);
+ * at a cap of 4 the very first shop would be unable to sell a machine at all —
+ * `buy` refuses a machine into a full line — so the first shop decision would stop
+ * being "which machine, and where does it go" and become "save ten credits for a
+ * slot". The slot ladder is otherwise untouched: LINESLOT_COSTS is indexed by
+ * `lineCap - BASE_LINE_CAP`, so a run now starts on the second rung and buys three
+ * slots to reach 8 instead of four. The 10c rung is the one this gives away.
+ */
+export const STARTER_LINE_CAP = 5;
+
+// ---------------------------------------------------------------------------
+// THE REPEAT PROTOCOL
+//
+// The only mechanism by which a shipment's score can grow faster than the LENGTH
+// of the line. Without it a batch makes exactly one pass through at most 8
+// machines, each worth roughly a doubling, which bounds a shipment at ~256x its
+// raw value no matter what the content does — measured, and the reason G5.1/G5.2
+// are architecture failures rather than tuning misses (docs/design/VERDICT-1.md
+// §2.4).
+//
+// A machine cannot do this by itself. `MachineDef.apply` is handed (batch, ctx,
+// level) and nothing else: it has no reference to the line, to its own position
+// in it, or to the other machines, and `MachineDef`/`RunCtx` are frozen, so there
+// is no field to declare a retrigger on either. The line is iterated in exactly
+// one place — `runLine` — so the loop has to live here.
+//
+// The channel is `ctx.memo`, which the frozen contract already describes as
+// "mutable scratch owned by machines". A machine asks for a repeat by writing
+// two numbers into it:
+//
+//     ctx.memo.__repeat      how many EXTRA passes to run   (1..MAX_REPEAT_PASSES)
+//     ctx.memo.__repeat_span how many machines IMMEDIATELY BEFORE it to repeat
+//
+// `runLine` consumes and deletes both keys after each machine fires, then re-runs
+// that span. Rules, all of them load-bearing:
+//
+//  - The requesting machine never re-fires itself. A retrigger cannot retrigger.
+//  - Requests raised INSIDE a repeat are discarded, so repeats never nest. With
+//    the span and pass clamps that bounds a shipment at
+//    len + len*MAX_REPEAT_SPAN*MAX_REPEAT_PASSES applies; MAX_MACHINE_APPLIES is
+//    a hard stop under that in case content ever gets cleverer than this comment.
+//  - `stages` keeps its shape: the whole repeat is folded into the requesting
+//    machine's own stage, so `stages[i+1]` is still "the batch as it leaves
+//    machine i" and every consumer (the UI reel, the per-machine attribution
+//    panel, the tests) keeps working unchanged. It also puts the entire gain of
+//    the loop on the retrigger's own row in the breakdown, which is where a player
+//    needs to see it.
+//  - Nothing here touches the RNG or the run, so preview still predicts play
+//    exactly: preview runs the identical loop over a COPY of the memo.
+//  - Batch growth inside a repeat is still bounded by MAX_BATCH in the content.
+// ---------------------------------------------------------------------------
+
+/** Extra passes a single retrigger may ask for. */
+export const MAX_REPEAT_PASSES = 2;
+/** Machines a single retrigger may reach back over. */
+export const MAX_REPEAT_SPAN = 5;
+/** Hard stop on machine applications per shipment. Bounds the hot path. */
+export const MAX_MACHINE_APPLIES = 64;
+
+const REPEAT_PASSES_KEY = '__repeat';
+const REPEAT_SPAN_KEY = '__repeat_span';
+
+interface RepeatRequest { passes: number; span: number }
+
+/** Read a pending repeat request out of the memo and clear it. */
+function takeRepeat(memo: Record<string, number> | undefined): RepeatRequest | null {
+  if (memo === undefined || memo === null) return null;
+  const p = memo[REPEAT_PASSES_KEY];
+  const s = memo[REPEAT_SPAN_KEY];
+  if (p !== undefined) delete memo[REPEAT_PASSES_KEY];
+  if (s !== undefined) delete memo[REPEAT_SPAN_KEY];
+  if (typeof p !== 'number' || !Number.isFinite(p)) return null;
+  const passes = Math.min(MAX_REPEAT_PASSES, Math.floor(p));
+  if (passes < 1) return null;
+  const rawSpan = typeof s === 'number' && Number.isFinite(s) ? Math.floor(s) : 1;
+  const span = Math.min(MAX_REPEAT_SPAN, Math.max(1, rawSpan));
+  return { passes, span };
+}
 
 export const SHOP_SIZE = 5;
 export const BASE_REROLL_COST = 3;
@@ -254,12 +366,35 @@ function runLine(
   let batch: Batch = entry;
   stages[0] = batch;
 
+  let applies = 0;
   for (let i = 0; i < len; i++) {
     const m = line[i];
     const def = machines.get(m.def);
     if (def !== undefined && (audit === undefined || audit.allow(def))) {
       const next = def.apply(batch, ctx, m.level);
       if (next != null) batch = next;
+      applies++;
+
+      // THE REPEAT PROTOCOL. See the block comment above. The loop is folded into
+      // this machine's own stage, so `stages` keeps its documented shape.
+      const req = takeRepeat(ctx.memo);
+      if (req !== null && i > 0 && applies < MAX_MACHINE_APPLIES) {
+        const from = Math.max(0, i - req.span);
+        for (let p = 0; p < req.passes; p++) {
+          for (let k = from; k < i; k++) {
+            if (applies >= MAX_MACHINE_APPLIES) break;
+            const rm = line[k];
+            const rdef = machines.get(rm.def);
+            if (rdef === undefined) continue;
+            if (audit !== undefined && !audit.allow(rdef)) continue;
+            const rnext = rdef.apply(batch, ctx, rm.level);
+            if (rnext != null) batch = rnext;
+            applies++;
+            // No nesting: a repeat raised inside a repeat is discarded, not run.
+            takeRepeat(ctx.memo);
+          }
+        }
+      }
     }
     stages[i + 1] = batch;
   }
@@ -532,7 +667,7 @@ export function newRun(seed: number): RunState {
     scrapsLeft: SCRAPS_PER_ROUND,
     credits: STARTING_CREDITS,
     line: [],
-    lineCap: BASE_LINE_CAP,
+    lineCap: Math.max(BASE_LINE_CAP, Math.min(MAX_LINE_CAP, STARTER_LINE_CAP)),
     crate: [],
     drawPile: [],
     hand: [],

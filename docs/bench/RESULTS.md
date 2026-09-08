@@ -607,3 +607,173 @@ Content self-measurement fed to G2.3: non-commutative machine pairs = 62.73% ove
 
 ---
 
+## Iteration 4 — 2026-09-08 — 3c47709
+
+⚠ UNDERSAMPLED (n=2000) — tier `random` is below the 20,000-run floor set by the gate.
+⚠ UNDERSAMPLED (n=2000) — tier `greedy` is below the 20,000-run floor set by the gate.
+⚠ UNDERSAMPLED (n=2000) — tier `planner` is below the 20,000-run floor set by the gate.
+⚠ UNDERSAMPLED (n=2000) — tier `oracle` is below the 20,000-run floor set by the gate.
+
+**GATE FORCED TO FAIL: a gate passed on thin data is not passed.**
+
+**NOT MEASURED (1): G1.5** — no samples reached the gate for these. They are counted as FAIL: an unmeasured threshold is not a met threshold.
+
+**MARGINAL (3): G1.3, G1.4, G4.1** — the 95% Wilson interval straddles the threshold, so the verdict on these rows would flip inside sampling noise. Treat as unproven in either direction.
+
+| tier | runs | win rate | 95% CI (Wilson) | median decisions | median win time |
+|---|---:|---:|---|---:|---:|
+| `random` ⚠ | 2,000 | 0.00% | [0.00%, 0.19%] | 19 | n/a |
+| `greedy` ⚠ | 2,000 | 0.00% | [0.00%, 0.19%] | 37 | n/a |
+| `planner` ⚠ | 2,000 | 59.80% | [57.63%, 61.93%] | 242 | 23.2 min |
+| `oracle` ⚠ | 2,000 | 66.60% | [64.50%, 68.63%] | 247 | 23.1 min |
+
+```text
+G1.1 0.00% PASS   threshold: < 2%   95% CI [0.00%, 0.19%]   random win rate
+G1.2 0.00% FAIL   threshold: 8% – 25%   95% CI [0.00%, 0.19%]   off by 100.0%   greedy win rate
+G1.3 59.80% PASS MARGINAL   threshold: 40% – 60%   95% CI [57.63%, 61.93%]   planner win rate
+G1.4 66.60% PASS MARGINAL   threshold: 65% – 88%   95% CI [64.50%, 68.63%]   oracle win rate
+G1.5 n/a (not measured) FAIL   threshold: ≥ 2.5×   95% CI [300.64×, 5711853341654967296.00×]   planner / greedy win-rate ratio
+G1.6 6.80 pp FAIL   threshold: ≥ 10 percentage points   95% CI [3.81 pp, 9.77 pp]   off by 32.0%   oracle − planner win rate
+G2.1 127.12% PASS   threshold: ≥ 25%   median score gain from optimal reorder
+G2.2 66.29% PASS   threshold: ≥ 50%   rounds where optimal ordering changed
+G2.3 63.30% PASS   threshold: ≥ 60%   non-commutative machine pairs
+G3.1 55.02% FAIL   threshold: ≤ 55%   off by 0.0%   most-used archetype share of planner wins
+G3.2 7 PASS   threshold: ≥ 5   archetypes appearing in ≥ 15% of wins
+G3.3 0.985 PASS   threshold: ≥ 0.80   normalized Shannon entropy over archetype usage
+G3.4 0 PASS   threshold: 0 such machines   machine defs in > 60% of wins
+G4.1 59.80% PASS MARGINAL   threshold: 40% – 60%   95% CI [57.63%, 61.93%]   planner win rate (tension)
+G4.2 33.33% PASS   threshold: ≤ 35%   largest share of losses in one shift
+G4.3 0.12% PASS   threshold: ≤ 20%   losses in shifts 1–2
+G5.1 30.70× PASS   threshold: ≥ 20×   p95 final score / final quota
+G5.2 202.74× PASS   threshold: ≥ 50×   p99 / p50 final score
+G6.1 75.41% FAIL   threshold: 20% – 45%   off by 67.6%   shipments where 2nd-best is within 10% of best
+G7.1 242 PASS   threshold: 120 – 260 decisions   median planner run length
+G7.2 23.2 min PASS   threshold: 15 – 35 min   median winning-run wall clock
+```
+
+GATE: FAIL (5 failing: G1.2, G1.5, G1.6, G3.1, G6.1)
+
+Weakest metric: G1.2 — next loop targets this.
+
+_Passing this gate means the mechanic is not the reason the game would fail. It does not predict chart position — see the stated limitation in docs/bench/BENCHMARK.md._
+
+### Supplement — measurements the frozen gate does not carry
+
+_Produced by `src/sim/analysis.ts`. `src/sim/gate.ts` is frozen for this agent and still scores the PRE-AMENDMENT G2.2 (`≥ 50%`) and has no G2.4; the amended pair from `docs/bench/BENCHMARK.md` §A1 is computed here._
+
+| metric | value | n | threshold (amended) | verdict |
+|---|---:|---:|---|---|
+| G2.2 optimal order changed, WITHIN a shift | 63.33% | 29354 | ≤ 30% | FAIL |
+| G2.4 optimal order changed, ACROSS a shift boundary | 73.11% | 12717 | ≥ 60% | PASS |
+| (gate.ts's G2.2: all transitions pooled) | 66.29% | 42071 | — | — |
+| strict variant, within a shift (full def sequence) | 67.10% | 29354 | — | — |
+| strict variant, across a boundary | 75.40% | 12717 | — | — |
+
+`optOrderChanged` compares the RELATIVE order of the machines the line kept between the two rounds; the strict variant compares the full def sequence, so buying a machine counts as a change on its own. Both are reported so the choice is the reader's.
+
+#### G6.1 read two ways
+
+| reading | value | n | threshold |
+|---|---:|---:|---|
+| 2nd-best ORDERED SELECTION within 10% (what gate.ts scores) | 75.41% | 228006 | 20–45% |
+| …of those, exact ties | 45.26% | 228006 | — |
+| 2nd-best DIFFERENT-SUBSET shipment within 10% | 75.41% | 228006 | — |
+
+The first runner-up is usually the same shipment with one scoreless part added or two commuting parts swapped, which ties exactly. The second asks whether a genuinely different shipment was nearly as good.
+
+#### Losses by round type — where runs actually die
+
+| tier | round 1 | round 2 | Audit (round 3) | losses |
+|---|---:|---:|---:|---:|
+| `random` | 4.85% | 20.80% | **74.35%** | 2000 |
+| `greedy` | 2.40% | 36.85% | **60.75%** | 2000 |
+| `planner` | 1.62% | 6.72% | **91.67%** | 804 |
+| `oracle` | 0.90% | 7.04% | **92.07%** | 668 |
+
+G4.2/G4.3 measure loss concentration across SHIFTS. This table measures it across ROUND TYPES, which the gate has no metric for. A third of rounds are Audits, so a healthy game concentrates roughly a third of its losses here.
+
+#### Per-Audit kill rates, by name
+
+_"reached" = runs that got past round 2 of that shift. "kill rate" = of the runs that faced this Audit, the share it ended. This is the table the rebalance should be steered by: a per-shift histogram cannot show it, because the concentration is on the ROUND axis, not the shift axis._
+
+`random`
+
+| shift | Audit | reached | died on it | kill rate | share of all losses |
+|---:|---|---:|---:|---:|---:|
+| 1 | Spot Check (`spot_check`) | 1927 | 1198 | 62.17% | 59.90% |
+| 2 | Tolerance Check (`tolerance_check`) | 440 | 206 | 46.82% | 10.30% |
+| 3 | Weight Limit (`weight_limit`) | 101 | 62 | 61.39% | 3.10% |
+| 4 | Line Freeze (`line_freeze`) | 21 | 17 | 80.95% | 0.85% |
+| 5 | Monoculture Review (`monoculture`) | 4 | 4 | 100.00% | 0.20% |
+| 6 | Parts Embargo (`parts_embargo`) | 0 | 0 | n/a | 0.00% |
+| 7 | Ratio Control (`ratio_control`) | 0 | 0 | n/a | 0.00% |
+| 8 | Final Inspection (`final_inspection`) | 0 | 0 | n/a | 0.00% |
+
+`greedy`
+
+| shift | Audit | reached | died on it | kill rate | share of all losses |
+|---:|---|---:|---:|---:|---:|
+| 1 | Spot Check (`spot_check`) | 1999 | 87 | 4.35% | 4.35% |
+| 2 | Tolerance Check (`tolerance_check`) | 1853 | 647 | 34.92% | 32.35% |
+| 3 | Weight Limit (`weight_limit`) | 752 | 447 | 59.44% | 22.35% |
+| 4 | Line Freeze (`line_freeze`) | 34 | 34 | 100.00% | 1.70% |
+| 5 | Monoculture Review (`monoculture`) | 0 | 0 | n/a | 0.00% |
+| 6 | Parts Embargo (`parts_embargo`) | 0 | 0 | n/a | 0.00% |
+| 7 | Ratio Control (`ratio_control`) | 0 | 0 | n/a | 0.00% |
+| 8 | Final Inspection (`final_inspection`) | 0 | 0 | n/a | 0.00% |
+
+`planner`
+
+| shift | Audit | reached | died on it | kill rate | share of all losses |
+|---:|---|---:|---:|---:|---:|
+| 1 | Spot Check (`spot_check`) | 2000 | 1 | 0.05% | 0.12% |
+| 2 | Tolerance Check (`tolerance_check`) | 1999 | 0 | 0.00% | 0.00% |
+| 3 | Weight Limit (`weight_limit`) | 1999 | 0 | 0.00% | 0.00% |
+| 4 | Line Freeze (`line_freeze`) | 1996 | 19 | 0.95% | 2.36% |
+| 5 | Monoculture Review (`monoculture`) | 1963 | 202 | 10.29% | 25.12% |
+| 6 | Parts Embargo (`parts_embargo`) | 1738 | 220 | 12.66% | 27.36% |
+| 7 | Ratio Control (`ratio_control`) | 1509 | 45 | 2.98% | 5.60% |
+| 8 | Final Inspection (`final_inspection`) | 1446 | 250 | 17.29% | 31.09% |
+
+`oracle`
+
+| shift | Audit | reached | died on it | kill rate | share of all losses |
+|---:|---|---:|---:|---:|---:|
+| 1 | Spot Check (`spot_check`) | 2000 | 0 | 0.00% | 0.00% |
+| 2 | Tolerance Check (`tolerance_check`) | 2000 | 0 | 0.00% | 0.00% |
+| 3 | Weight Limit (`weight_limit`) | 2000 | 0 | 0.00% | 0.00% |
+| 4 | Line Freeze (`line_freeze`) | 1997 | 18 | 0.90% | 2.69% |
+| 5 | Monoculture Review (`monoculture`) | 1973 | 158 | 8.01% | 23.65% |
+| 6 | Parts Embargo (`parts_embargo`) | 1803 | 172 | 9.54% | 25.75% |
+| 7 | Ratio Control (`ratio_control`) | 1619 | 38 | 2.35% | 5.69% |
+| 8 | Final Inspection (`final_inspection`) | 1561 | 229 | 14.67% | 34.28% |
+
+#### Bot integrity
+
+Strict dominance (oracle ≥ planner ≥ greedy ≥ random) on 2000 shared seeds: **HOLDS**
+
+- `oracle - planner` = 6.80 pp
+- `planner - greedy` = 59.80 pp
+- `greedy - random` = 0.00 pp
+
+Planner search coverage, per shipment decision:
+
+- ordered selections scored: median **243**, min 31, max 519
+- the full ordered-selection space from a hand of 8 at 1–5 parts is **8,800**; all 218 SUBSETS are enumerated exactly, and ordering search is bounded (best-insertion + swap descent) on the best few
+- `previewShipment` calls per run: median **124,826**
+- runs where a search hit its preview budget: 454
+
+Throughput:
+
+| tier | ms/run/core | runs/s/core | wall for this sweep |
+|---|---:|---:|---:|
+| `random` | 0.6 | 1633.51 | 0.5s |
+| `greedy` | 13.3 | 75.02 | 7.1s |
+| `planner` | 228.1 | 4.38 | 116.2s |
+| `oracle` | 923.7 | 1.08 | 481.9s |
+
+Content self-measurement fed to G2.3: non-commutative machine pairs = 63.30% over 20,000 trials (57.04% including 1-part batches).
+
+
+---
+

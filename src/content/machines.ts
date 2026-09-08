@@ -1392,6 +1392,106 @@ const GAMBLE: MachineDef[] = [
 ];
 
 // ===========================================================================
+// RETRIGGER — the only machines in this file whose value grows with the LINE
+// rather than with the batch.
+//
+// Why they exist. A shipment is one pass through at most 8 machines. Eight
+// machines each worth roughly a doubling bounds a shipment at ~256x, and the
+// measurements land exactly there: the biggest number a median winning player
+// ever saw was four digits (VERDICT-1 §2.4). That is not a number anyone posts,
+// and it is not fixable by making machines stronger — the exponent is the slot
+// count, and the slot count is 8.
+//
+// These four change the exponent. A retrigger asks the ENGINE to run the span of
+// machines immediately before it a second (or third) time, so a line of
+// 6 multipliers plus a retrigger over the last 3 is worth 2^9, not 2^6. The
+// exponent now grows with what the player ACQUIRED, which is the property Balatro's
+// scoring has and this game did not.
+//
+// Three consequences, all deliberate:
+//
+//  - ORDER MATTERS MORE, NOT LESS. A retrigger is worth exactly the span sitting in
+//    front of it. Bought and dropped at the end of a line it repeats whatever is
+//    there; moved one slot, it repeats something else. This is the single most
+//    order-sensitive object in the set, which is the opposite of what a flat
+//    "x10 score" legendary would have been.
+//  - THE SCREENSHOT IS THE MACHINE'S OWN ROW. The engine folds the whole loop into
+//    the retrigger's stage, so "WHY THE NUMBER MOVED" prints the entire repeat as
+//    one enormous bar under the retrigger's name.
+//  - REACHABLE BY A BUILD, NOT BY DEFAULT. Measured over 400 planner runs on the
+//    shipped tuning: 12.8% of runs acquire any retrigger at all. Those runs finish at
+//    a median 12.1x the final quota and a p95 of 995x; the runs that do not finish at
+//    1.3x and 7.4x. That is the shape this change is for — a fat right tail, not a
+//    new floor. The whole family is worth +2.0pp of planner win rate, which is the
+//    number that says it is a ceiling and not a buff.
+//
+//    KNOWN, MEASURED, NOT FIXED: `graveyard` was acquired 0 times in those 400 runs.
+//    So were `realize` and `masterwork`, the two legendaries that predate it, so this
+//    is the shop's rarity/price economics and not this machine — `rarityWeight` in
+//    engine/run.ts is where it would be fixed and that dial was out of scope here.
+//    Every number above is therefore carried by `repeater`, `relay` and
+//    `second_shift`; the legendary is currently design, not measurement.
+//
+// The protocol they speak (`ctx.memo.__repeat` / `__repeat_span`) is documented in
+// engine/run.ts under THE REPEAT PROTOCOL. Repeats never nest and the engine caps
+// total applications per shipment, so a retrigger cannot run away.
+// ===========================================================================
+
+/**
+ * Ask the engine to run the `span` machines immediately before this one `passes`
+ * more times. A no-op when the requesting machine is first in the line.
+ */
+function repeat(ctx: RunCtx, span: number, passes: number): void {
+  if (!ctx || !ctx.memo) return;
+  ctx.memo.__repeat = Math.max(1, Math.floor(passes));
+  ctx.memo.__repeat_span = Math.max(1, Math.floor(span));
+}
+
+const RETRIGGER: MachineDef[] = [
+  // The workhorse. Two machines wide, so it is worth whatever pair the player parks
+  // in front of it — and worth almost nothing at the head of the line.
+  mk('repeater', 'Repeater', 'positional', 'uncommon', 10,
+    (l) => `the ${L(l, 2, 3, 3)} machines before this run again${L(l, '', '', ', twice')}; the last part moves to the front`,
+    (b, c, l) => {
+      repeat(c, L(l, 2, 3, 3), L(l, 1, 1, 2));
+      return b.length > 1 ? toFront(b, b.length - 1) : b.slice();
+    }),
+
+  // The cheap one, and the one that teaches the idea. Span 1: it repeats exactly the
+  // machine standing in front of it, so the first thing a player learns about a
+  // retrigger is that its value IS its neighbour.
+  mk('relay', 'Relay', 'positional', 'uncommon', 9,
+    (l) => `the machine before this runs again${L(l, '', ', twice', ', twice')}; the first part moves to the back`,
+    (b, c, l) => {
+      repeat(c, L(l, 1, 1, 2), L(l, 1, 2, 2));
+      return b.length > 1 ? toBack(b, 0) : b.slice();
+    }),
+
+  // The build. Gated on a single-tag batch, which is a thing the player has to WANT
+  // and has a whole archetype's worth of enablers for (alloy, ferment, the sieves,
+  // graft). It pays nothing at all to a line that just fills up.
+  mk('second_shift', 'Second Shift', 'conditional', 'rare', 11,
+    (l) => `all one tag: the ${L(l, 2, 2, 3)} machines before this run again twice. Else +${L(l, 22, 34, 50)} first`,
+    (b, c, l) => {
+      if (b.length === 0) return [];
+      if (oneTag(b) === null) return at(b, 0, (p) => addV(p, L(l, 22, 34, 50)));
+      repeat(c, L(l, 2, 2, 3), 2);
+      return swapAt(b, 0, b.length - 1);
+    }),
+
+  // The ceiling. Legendary, and it reaches back over half a full line — this is the
+  // one that produces a number worth showing someone, and it is meant to be the
+  // rarest thing a run can be built around.
+  mk('graveyard', 'Graveyard Shift', 'positional', 'legendary', 16,
+    (l) => `the ${L(l, 3, 4, 5)} machines before this all run again; +${L(l, 14, 22, 34)} to the last part`,
+    (b, c, l) => {
+      repeat(c, L(l, 3, 4, 5), 1);
+      if (b.length === 0) return [];
+      return at(b, b.length - 1, (p) => addV(p, L(l, 14, 22, 34)));
+    }),
+];
+
+// ===========================================================================
 // export
 // ===========================================================================
 
@@ -1406,6 +1506,7 @@ export const MACHINES: MachineDef[] = [
   ...IDENTITY,
   ...CONVEYOR,
   ...GAMBLE,
+  ...RETRIGGER,
 ];
 
 /**
@@ -1418,7 +1519,7 @@ export const BUILD_SUPPORT: Record<string, string[]> = {
   // one enormous object: concentrate value into a part, promote it, then multiply it
   tall: ['hoist', 'xerox', 'absorb', 'siphon', 'realize', 'condense', 'topcut', 'crown',
     'doubler', 'stamp', 'tithe', 'intake', 'quality', 'trim', 'purge', 'threshold',
-    'kiln', 'tribute', 'masterwork', 'sparse', 'crucible'],
+    'kiln', 'tribute', 'masterwork', 'sparse', 'crucible', 'graveyard'],
   // many small parts: spawn bodies, then pay per body
   wide: ['echo', 'mimic', 'budding', 'assembler', 'overflow', 'shadow', 'weld', 'lathe',
     'scrapper', 'splitter', 'press', 'tally', 'bulk', 'equalize', 'standardize', 'cascade',
@@ -1426,12 +1527,13 @@ export const BUILD_SUPPORT: Record<string, string[]> = {
   // single-tag batches: cheap setup, enormous conditional payoff
   purity: ['alloy', 'ferment', 'graft', 'purity', 'sieve_metal', 'sieve_organic',
     'sieve_volatile', 'sieve_precision', 'unique', 'adjacent', 'kinship', 'precision_run',
-    'lathe', 'destabilize', 'calibrate', 'tag_sort', 'assembly_line', 'catalyst', 'corrupter'],
+    'lathe', 'destabilize', 'calibrate', 'tag_sort', 'assembly_line', 'catalyst', 'corrupter',
+    'second_shift'],
   // arrange the batch, then cash the arrangement in
   sorting: ['sort_asc', 'sort_desc', 'reverse', 'rot_left', 'rot_right', 'swap_ends',
     'pair_swap', 'halves', 'interleave', 'tag_sort', 'ascend', 'descend', 'crown',
     'ratchet', 'cascade', 'mirror_add', 'sink', 'bonded', 'graft', 'chain_forge', 'escalator',
-    'metronome', 'handover', 'drag', 'slipstream'],
+    'metronome', 'handover', 'drag', 'slipstream', 'repeater', 'relay', 'graveyard'],
   // credits are the score: buy the curve instead of out-scoring it
   economy: ['till', 'broker', 'payload', 'tariff', 'smelter', 'invest', 'dividend', 'wage',
     'contract', 'stipend', 'salvage', 'bonded', 'jackpot'],

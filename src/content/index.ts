@@ -17,11 +17,58 @@ import { BLUEPRINTS } from './blueprints.ts';
 import { AUDITS } from './audits.ts';
 
 /**
- * The opening line: a Press (flat value, teaches "machines add"), a Foundry (the
- * first promotion the player ever sees — a Rivet becomes a Bolt on turn one) and a
- * Reverser so that the very first shop decision is already an ordering decision.
+ * THE OPENING LINE — four machines in a deliberately wrong order.
+ *
+ * What it replaces and why. The opening used to be `press -> foundry -> doubler`,
+ * and the Chart Critic measured what that actually taught: over 200 seeds the order
+ * the player was handed was ALREADY OPTIMAL in 86% of first turns, and the median
+ * gain from reordering it was 0.0%. The game opened by putting a button marked
+ * ORDER in front of a stranger next to a panel headed "REORDER THE LINE — drag",
+ * and in six runs out of seven dragging anything made the number worse. The one
+ * mechanic the product rests on did not appear until the line reached six machines,
+ * which the median run does not reach until shift 4 — twelve minutes in.
+ *
+ * This line is wrong, on purpose, in one specific and legible way:
+ *
+ *     FOUNDRY   promote the first part one tier      <- in the wrong place
+ *     STAMP     +16 first, then it moves to the back
+ *     HOIST     move the highest to front, +10
+ *     DOUBLER   x2 mult first, then swap the first two
+ *
+ * `promote` is multiplicative — a promoted part keeps 1.5x of the value it already
+ * had, plus its new tier's base. So the Foundry wants to fire LATE, on a part that
+ * has been fattened by the Stamp and chosen by the Hoist. Handed first, it promotes
+ * whichever part happens to be at the front, before anything has happened to it.
+ *
+ * Dragging the Foundry from slot 1 to slot 3 — one machine, one drag — is the whole
+ * fix, and it is the correct drag in 100% of seeds. Measured over 200 seeds with
+ * the critic's own probe (best shipment chosen under the handed order, then the
+ * line permuted): median gain 48.7%, 0% of runs already optimal. Under a plain
+ * heaviest-five-parts shipment — what a first-time player actually does — 47.5%.
+ * The two agree, which is the point: this line is wrong in the machines, not in a
+ * batch order the player could have fixed instead.
+ *
+ * Three design constraints it is built to satisfy:
+ *
+ *  - WRONG, NOT BAD. The handed order still beats 83% of the 24 possible orders and
+ *    its first shipment scores ~234 against a 210 quota, so a new player clears
+ *    round 1 on their first shipment and reads the line as a working factory that
+ *    happens to be improvable. Frustration in the first ninety seconds is worse
+ *    than boredom.
+ *  - LEGIBLE FROM THE BREAKDOWN ALONE. The fix shows up as one row: the FOUNDRY
+ *    line in "WHY THE NUMBER MOVED" goes from a rounding error to the biggest
+ *    contribution on the panel, because it promoted a Gear instead of an Offcut.
+ *    Nothing else in the panel changes shape.
+ *  - THE ALCHEMY HOOK SURVIVES. The Foundry is still here, so a Rivet still becomes
+ *    a Bolt on turn one — the one 30-second hook the critic judged to be working.
+ *
+ * Known limitation, recorded rather than hidden: this is still ONE fixed opening in
+ * every run. The critic's §2.7 sameness finding wants the opening line varied across
+ * runs, which needs `starterLine` to become a draw rather than a constant, and the
+ * A2 amendment (`aggregate({ excludeMachineDefs: starterLine })`) reads it as a
+ * constant. That is a separate change and it is not made here.
  */
-export const STARTER_LINE: string[] = ['press', 'foundry', 'doubler'];
+export const STARTER_LINE: string[] = ['foundry', 'stamp', 'hoist', 'doubler'];
 
 export const CONTENT: Registry = buildRegistry({
   machines: MACHINES,
